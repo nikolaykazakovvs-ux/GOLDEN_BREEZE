@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pt
+*.pkl
+*.sqlite
+config_dynamic.json
+mt5_config.json
+logs/
+
+# Metrics and reports
+metrics_report.json
+equity_curve.png
+metrics_summary.png

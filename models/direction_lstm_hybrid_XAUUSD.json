@@ -1,0 +1,44 @@
+{
+  "model_type": "DirectionLSTM",
+  "training_date": "2025-12-01 16:41:00",
+  "dataset_path": "data\\prepared\\direction_dataset_XAUUSD.npz",
+  "seq_len": 50,
+  "hidden_size": 64,
+  "num_layers": 2,
+  "dropout": 0.3,
+  "n_features": 11,
+  "n_classes": 2,
+  "feature_cols": [
+    "close",
+    "returns",
+    "log_returns",
+    "sma_fast",
+    "sma_slow",
+    "sma_ratio",
+    "atr",
+    "atr_norm",
+    "rsi",
+    "bb_position",
+    "volume_ratio"
+  ],
+  "symbol": "XAUUSD",
+  "timeframe": "M5",
+  "epochs_trained": 5,
+  "best_val_mcc": 0.12244502829258476,
+  "test_metrics": {
+    "accuracy": 0.6223776223776224,
+    "f1_macro": 0.5952830188679246,
+    "mcc": 0.21949912697825266,
+    "loss": 0.6648961424827575
+  },
+  "confusion_matrix": [
+    [
+      126,
+      33
+    ],
+    [
+      75,
+      52
+    ]
+  ]
+}
