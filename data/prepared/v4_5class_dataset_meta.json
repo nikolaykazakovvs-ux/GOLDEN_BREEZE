@@ -1,41 +1,41 @@
 {
-  "created": "2025-12-04T09:42:25.142251",
+  "created": "2025-12-04T10:40:23.348170",
   "m5_path": "data/raw/XAUUSD/M5.csv",
   "h1_path": "data/raw/XAUUSD/H1.csv",
-  "n_samples": 34627,
+  "n_samples": 99748,
   "seq_len_fast": 50,
   "seq_len_slow": 20,
   "horizon": 12,
   "strong_thresh": 0.004,
   "weak_thresh": 0.001,
   "x_fast_shape": [
-    34627,
+    99748,
     50,
     15
   ],
   "x_slow_shape": [
-    34627,
+    99748,
     20,
     8
   ],
   "x_strategy_shape": [
-    34627,
+    99748,
     64
   ],
   "n_classes": 5,
   "class_distribution": {
-    "STRONG_DOWN": 1333,
-    "WEAK_DOWN": 7241,
-    "NEUTRAL": 16036,
-    "WEAK_UP": 8955,
-    "STRONG_UP": 1331
+    "STRONG_DOWN": 3376,
+    "WEAK_DOWN": 19386,
+    "NEUTRAL": 49626,
+    "WEAK_UP": 24576,
+    "STRONG_UP": 3024
   },
   "class_weights": [
-    5.235708713531494,
-    0.9638447761535645,
-    0.43522074818611145,
-    0.7793635129928589,
-    5.2435760498046875
+    5.923459529876709,
+    1.0315485000610352,
+    0.4029662013053894,
+    0.8137044310569763,
+    6.6129631996154785
   ],
   "strategy_features": [
     "ema_9_21_signal",

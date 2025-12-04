@@ -74,7 +74,7 @@ class V4Config:
     max_dynamic_tokens: int = 10  # Max active OBs to track
     
     # === Strategy Signals ===
-    strategy_signal_dim: int = 33  # Number of strategy signals (from StrategySignalsGenerator)
+    strategy_signal_dim: int = 64  # Number of strategy signals (V4: 64 features from 19 indicators)
     
     # === SMC Decay Parameters ===
     smc_decay_lambda: float = SMC_DECAY_LAMBDA
@@ -85,7 +85,7 @@ class V4Config:
     seq_len_slow: int = 50    # H1 bars (50 * 1hour = 50 hours)
     
     # === Output Heads ===
-    num_classes: int = 3      # UP, DOWN, HOLD
+    num_classes: int = 5      # STRONG_DOWN, WEAK_DOWN, NEUTRAL, WEAK_UP, STRONG_UP
     score_hidden_dim: int = 64
     
     # === Training ===

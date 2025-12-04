@@ -1,0 +1,83 @@
+{
+  "timestamp": "2025-12-04T12:17:31.320308",
+  "data_path": "data/prepared/v4_5class_dataset.npz",
+  "epochs_trained": 23,
+  "best_epoch": 8,
+  "best_val_mcc": 0.03321118810348117,
+  "test_loss": 2.5624757300944583,
+  "test_accuracy": 0.16346989240125642,
+  "test_mcc": 0.021029742084358087,
+  "per_class_accuracy": {
+    "STRONG_DOWN": 0.25816326530612244,
+    "WEAK_DOWN": 0.2994402985074627,
+    "NEUTRAL": 0.03403289846851957,
+    "WEAK_UP": 0.1485523385300668,
+    "STRONG_UP": 0.3876518218623482
+  },
+  "confusion_matrix": [
+    [
+      253,
+      158,
+      18,
+      128,
+      423
+    ],
+    [
+      854,
+      963,
+      75,
+      411,
+      913
+    ],
+    [
+      1314,
+      1622,
+      180,
+      772,
+      1401
+    ],
+    [
+      1154,
+      1143,
+      165,
+      667,
+      1361
+    ],
+    [
+      282,
+      187,
+      4,
+      132,
+      383
+    ]
+  ],
+  "class_distribution": {
+    "STRONG_DOWN": {
+      "count": 3362,
+      "pct": 3.3704936439828366
+    },
+    "WEAK_DOWN": {
+      "count": 19364,
+      "pct": 19.412920559810722
+    },
+    "NEUTRAL": {
+      "count": 49464,
+      "pct": 49.58896418975819
+    },
+    "WEAK_UP": {
+      "count": 24534,
+      "pct": 24.595981874323293
+    },
+    "STRONG_UP": {
+      "count": 3024,
+      "pct": 3.031639732124955
+    }
+  },
+  "model_params": 137253,
+  "hyperparameters": {
+    "batch_size": 64,
+    "lr": 0.0003,
+    "epochs": 60,
+    "patience": 15
+  }
+}
