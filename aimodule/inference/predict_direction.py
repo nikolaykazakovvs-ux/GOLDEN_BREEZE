@@ -14,12 +14,13 @@ from ..config import DIRECTION_LSTM_MODEL_PATH
 # Попытка загрузить улучшенную LSTM модель
 direction_lstm_model = None
 try:
-    # Проверяем наличие модели direction_lstm.pt
     lstm_path = Path(DIRECTION_LSTM_MODEL_PATH)
     if lstm_path.exists():
         from ..models.direction_lstm_model import DirectionLSTMWrapper
         direction_lstm_model = DirectionLSTMWrapper.load(str(lstm_path))
-        print(f"✅ Загружена улучшенная LSTM модель направления: {lstm_path}")
+        print(f"✅ Загружена LSTM модель направления: {lstm_path.name}")
+    else:
+        print(f"ℹ️  Гибридная LSTM модель не найдена ({lstm_path}), используется fallback")
 except Exception as e:
     print(f"⚠️  Улучшенная LSTM модель не загружена, используется fallback: {e}")
 
@@ -45,11 +46,17 @@ def infer_direction(df: pd.DataFrame) -> tuple[Direction, float]:
     if direction_lstm_model is not None:
         try:
             direction, confidence = direction_lstm_model.predict_proba(df)
+            print(f"[DEBUG predict_direction] LSTM returned: direction={direction}, confidence={confidence:.8f}")
+            
             if confidence > 0.1:  # минимальная уверенность
+                print(f"[DEBUG predict_direction] Using LSTM result (confidence {confidence:.8f} > 0.1)")
                 return direction, confidence
-        except Exception:
-            pass
+            else:
+                print(f"[DEBUG predict_direction] FALLBACK: confidence {confidence:.8f} <= 0.1")
+        except Exception as e:
+            print(f"[DEBUG predict_direction] LSTM exception: {e}")
     
     # Fallback на базовую модель
     direction, confidence = direction_predictor.predict(df)
+    print(f"[DEBUG predict_direction] Fallback returned: direction={direction}, confidence={confidence:.8f}")
     return direction, confidence

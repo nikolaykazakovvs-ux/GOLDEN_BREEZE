@@ -527,6 +527,7 @@ def main():
             df_h1=df_h1,
             df_labels=df_labels,
             config=config,
+            label_col='direction_label',  # Column name in labels file
         )
     
     print(f"\nDataset size: {len(dataset)}")

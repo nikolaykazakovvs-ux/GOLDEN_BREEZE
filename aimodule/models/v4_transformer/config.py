@@ -60,7 +60,7 @@ class V4Config:
     # === Sliding Patch Encoding ===
     patch_size: int = 16
     patch_stride: int = 8
-    input_channels: int = 6  # OHLCV + Volume (normalized)
+    input_channels: int = 5  # OHLCV (Open, High, Low, Close, Volume)
     
     # === SMC Features (Updated for Phase 2) ===
     # Static SMC Vector: [rel_high, rel_low, is_bullish, time_decay, 

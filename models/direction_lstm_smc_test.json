@@ -1,0 +1,48 @@
+{
+  "model_type": "DirectionLSTM",
+  "training_date": "2025-12-03 03:05:50",
+  "dataset_path": "data/prepared/direction_dataset_smc.npz",
+  "seq_len": 50,
+  "hidden_size": 64,
+  "num_layers": 2,
+  "dropout": 0.3,
+  "n_features": 15,
+  "n_classes": 2,
+  "feature_cols": [
+    "close",
+    "returns",
+    "log_returns",
+    "sma_fast",
+    "sma_slow",
+    "sma_ratio",
+    "atr",
+    "atr_norm",
+    "rsi",
+    "bb_position",
+    "volume_ratio",
+    "SMC_FVG_Bullish",
+    "SMC_FVG_Bearish",
+    "SMC_Swing_High",
+    "SMC_Swing_Low"
+  ],
+  "symbol": "XAUUSD",
+  "timeframe": "M5",
+  "epochs_trained": 1,
+  "best_val_mcc": 0.0,
+  "test_metrics": {
+    "accuracy": 0.5559440559440559,
+    "f1_macro": 0.35730337078651686,
+    "mcc": 0.0,
+    "loss": 0.6833985567092895
+  },
+  "confusion_matrix": [
+    [
+      159,
+      0
+    ],
+    [
+      127,
+      0
+    ]
+  ]
+}

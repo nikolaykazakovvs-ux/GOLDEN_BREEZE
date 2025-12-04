@@ -169,3 +169,36 @@ class AIClient:
     def get_last_multitf_signals(self) -> Optional[Dict[str, Dict]]:
         """Последние полученные сигналы по всем таймфреймам"""
         return self.last_multitf_signals
+    
+    def predict_regime(self, symbol: str, timeframe: str) -> Dict:
+        """
+        Запрос AI Regime для конкретного таймфрейма (для Smart Scanner).
+        
+        Args:
+            symbol: Торговая пара (например, "XAUUSD")
+            timeframe: Таймфрейм (M5, M15, H1, H4)
+        
+        Returns:
+            {
+                "regime": "trend_up/trend_down/range/volatile/unknown",
+                "confidence": 0.0-1.0
+            }
+        """
+        try:
+            # Запрашиваем последние 100 свечей через predict
+            # (В реальности здесь нужно получить candles, но для теста упрощаем)
+            response = requests.get(
+                f"{self.api_url}/regime",
+                params={"symbol": symbol, "timeframe": timeframe},
+                timeout=5
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                # Fallback: возвращаем unknown
+                return {"regime": "unknown", "confidence": 0.0}
+        
+        except Exception as e:
+            print(f"predict_regime error: {e}")
+            return {"regime": "unknown", "confidence": 0.0}

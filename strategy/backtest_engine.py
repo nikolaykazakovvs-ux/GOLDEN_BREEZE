@@ -46,7 +46,15 @@ class BacktestEngine:
         """
         for tf, data in data_dict.items():
             df = data.copy()
-            df.index = pd.to_datetime(df.index)
+            # FIX: Правильная обработка timestamp
+            if 'time' in df.columns:
+                df['time'] = pd.to_datetime(df['time'], errors='coerce')
+                df = df.dropna(subset=['time'])
+                df.set_index('time', inplace=True, drop=False)
+            else:
+                df.index = pd.to_datetime(df.index, errors='coerce')
+                df = df[df.index.notna()]
+            
             self.multitf_data[tf] = df
             
             # Для обратной совместимости
@@ -58,18 +66,65 @@ class BacktestEngine:
     def load_m5_data(self, data: pd.DataFrame):
         """Загрузка M5 данных с индикаторами (обратная совместимость)"""
         self.m5_data = data.copy()
-        self.m5_data.index = pd.to_datetime(self.m5_data.index)
+        # FIX: Правильная обработка timestamp
+        if 'time' in self.m5_data.columns:
+            self.m5_data['time'] = pd.to_datetime(self.m5_data['time'], errors='coerce')
+            self.m5_data = self.m5_data.dropna(subset=['time'])
+            self.m5_data.set_index('time', inplace=True, drop=False)
+        else:
+            self.m5_data.index = pd.to_datetime(self.m5_data.index, errors='coerce')
+            self.m5_data = self.m5_data[self.m5_data.index.notna()]
         self.multitf_data["M5"] = self.m5_data
     
     def load_m1_data(self, data: pd.DataFrame):
         """Загрузка M1 данных для интрабарной симуляции"""
         self.m1_data = data.copy()
-        self.m1_data.index = pd.to_datetime(self.m1_data.index)
+        # FIX: Правильная обработка timestamp
+        if 'time' in self.m1_data.columns:
+            self.m1_data['time'] = pd.to_datetime(self.m1_data['time'], errors='coerce')
+            self.m1_data = self.m1_data.dropna(subset=['time'])
+            self.m1_data.set_index('time', inplace=True, drop=False)
+        else:
+            self.m1_data.index = pd.to_datetime(self.m1_data.index, errors='coerce')
+            self.m1_data = self.m1_data[self.m1_data.index.notna()]
     
     def load_tick_data(self, data: pd.DataFrame):
         """Загрузка тиковых данных"""
         self.tick_data = data.copy()
-        self.tick_data.index = pd.to_datetime(self.tick_data.index)
+        # FIX: Правильная обработка timestamp
+        if 'time' in self.tick_data.columns:
+            self.tick_data['time'] = pd.to_datetime(self.tick_data['time'], errors='coerce')
+            self.tick_data = self.tick_data.dropna(subset=['time'])
+            self.tick_data.set_index('time', inplace=True, drop=False)
+        else:
+            self.tick_data.index = pd.to_datetime(self.tick_data.index, errors='coerce')
+            self.tick_data = self.tick_data[self.tick_data.index.notna()]
+    
+    def load_csv_data(self, filepath: str, timeframe: str = "M5"):
+        """
+        Загрузка данных из CSV с правильным парсингом дат.
+        
+        Args:
+            filepath: Путь к CSV файлу
+            timeframe: Таймфрейм данных (M5, M15, H1, H4)
+        """
+        # FIX: Используем parse_dates для правильной загрузки
+        df = pd.read_csv(filepath, parse_dates=['time'])
+        
+        # Конвертируем time в datetime
+        df['time'] = pd.to_datetime(df['time'], errors='coerce')
+        df = df.dropna(subset=['time'])
+        df.set_index('time', inplace=True, drop=False)
+        
+        # Загружаем в соответствующий таймфрейм
+        self.multitf_data[timeframe] = df
+        if timeframe == "M5":
+            self.m5_data = df
+        
+        print(f"✅ Loaded {len(df)} candles from {filepath} ({timeframe})")
+        print(f"   Date range: {df.index.min()} to {df.index.max()}")
+        
+        return df
     
     def run(self, start_date: Optional[str] = None, end_date: Optional[str] = None):
         """

@@ -581,11 +581,25 @@ class FusionDatasetV2(Dataset):
         """
         config = config or V4Config()
         
-        # Default features
+        # Auto-detect volume column name (tick_volume or volume)
+        def get_volume_col(df: pd.DataFrame) -> str:
+            """Get the volume column name from dataframe."""
+            if 'tick_volume' in df.columns:
+                return 'tick_volume'
+            elif 'volume' in df.columns:
+                return 'volume'
+            else:
+                raise ValueError(f"No volume column found. Available: {list(df.columns)}")
+        
+        # Default features with auto-detected volume column
         if m5_features is None:
-            m5_features = ['open', 'high', 'low', 'close', 'volume']
+            m5_vol = get_volume_col(df_m5)
+            m5_features = ['open', 'high', 'low', 'close', m5_vol]
+            print(f"  M5 using volume column: {m5_vol}")
         if h1_features is None:
-            h1_features = ['open', 'high', 'low', 'close', 'volume']
+            h1_vol = get_volume_col(df_h1)
+            h1_features = ['open', 'high', 'low', 'close', h1_vol]
+            print(f"  H1 using volume column: {h1_vol}")
         
         print("Step 1: Aligning datasets...")
         aligner = TimeAligner()
@@ -631,6 +645,62 @@ class FusionDatasetV2(Dataset):
             labels=labels,
             config=config,
         )
+    
+    def get_splits(
+        self, 
+        train_ratio: float = 0.7,
+        val_ratio: float = 0.15,
+        shuffle: bool = False,
+        seed: int = 42,
+    ) -> Tuple['FusionDatasetV2', 'FusionDatasetV2', 'FusionDatasetV2']:
+        """
+        Split dataset into train/val/test using index slicing.
+        
+        Args:
+            train_ratio: Fraction for training
+            val_ratio: Fraction for validation (test = 1 - train - val)
+            shuffle: Whether to shuffle before splitting (default: False for time series)
+            seed: Random seed for shuffling
+            
+        Returns:
+            Tuple of (train_dataset, val_dataset, test_dataset)
+        """
+        n = len(self)
+        indices = list(range(n))
+        
+        if shuffle:
+            np.random.seed(seed)
+            np.random.shuffle(indices)
+        
+        train_end = int(n * train_ratio)
+        val_end = int(n * (train_ratio + val_ratio))
+        
+        train_indices = indices[:train_end]
+        val_indices = indices[train_end:val_end]
+        test_indices = indices[val_end:]
+        
+        # Create subset datasets
+        train_ds = FusionDatasetV2Subset(self, train_indices)
+        val_ds = FusionDatasetV2Subset(self, val_indices)
+        test_ds = FusionDatasetV2Subset(self, test_indices)
+        
+        return train_ds, val_ds, test_ds
+
+
+class FusionDatasetV2Subset(Dataset):
+    """
+    Subset of FusionDatasetV2 using index mapping.
+    """
+    
+    def __init__(self, parent: FusionDatasetV2, indices: List[int]):
+        self.parent = parent
+        self.indices = indices
+    
+    def __len__(self) -> int:
+        return len(self.indices)
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        return self.parent[self.indices[idx]]
 
 
 if __name__ == "__main__":

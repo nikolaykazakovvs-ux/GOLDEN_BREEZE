@@ -1,0 +1,21 @@
+{
+  "d_model": 128,
+  "nhead": 4,
+  "num_layers_fast": 2,
+  "num_layers_slow": 2,
+  "dim_feedforward": 512,
+  "dropout": 0.1,
+  "activation": "gelu",
+  "patch_size": 16,
+  "patch_stride": 8,
+  "input_channels": 6,
+  "static_smc_dim": 16,
+  "dynamic_smc_dim": 12,
+  "max_dynamic_tokens": 10,
+  "smc_decay_lambda": 0.05,
+  "smc_max_ob_age": 200,
+  "seq_len_fast": 200,
+  "seq_len_slow": 50,
+  "num_classes": 3,
+  "score_hidden_dim": 64
+}

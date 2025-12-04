@@ -1,0 +1,65 @@
+{
+  "M5": {
+    "train_bars": 63220,
+    "test_bars": 1951,
+    "train_sequences": 63169,
+    "test_sequences": 1900,
+    "train_time": 62.655253887176514,
+    "val_mcc": 0.04696497776434642,
+    "test_accuracy": 0.6226315789473684,
+    "test_f1": 0.5509768059068155,
+    "test_mcc": 0.10258612016434797,
+    "confusion_matrix": [
+      [
+        971,
+        338
+      ],
+      [
+        379,
+        212
+      ]
+    ]
+  },
+  "M15": {
+    "train_bars": 21107,
+    "test_bars": 651,
+    "train_sequences": 21056,
+    "test_sequences": 600,
+    "train_time": 22.222954750061035,
+    "val_mcc": 0.023601467857720652,
+    "test_accuracy": 0.5,
+    "test_f1": 0.4838916860685163,
+    "test_mcc": -0.030874480944785107,
+    "confusion_matrix": [
+      [
+        203,
+        161
+      ],
+      [
+        139,
+        97
+      ]
+    ]
+  },
+  "H1": {
+    "train_bars": 5285,
+    "test_bars": 163,
+    "train_sequences": 5234,
+    "test_sequences": 112,
+    "train_time": 2.8531033992767334,
+    "val_mcc": 0.0008601898177760903,
+    "test_accuracy": 0.39285714285714285,
+    "test_f1": 0.39208173690932313,
+    "test_mcc": -0.19503160409159467,
+    "confusion_matrix": [
+      [
+        20,
+        43
+      ],
+      [
+        25,
+        24
+      ]
+    ]
+  }
+}

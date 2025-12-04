@@ -270,8 +270,49 @@ class HybridStrategy:
             Signal dict или None
         """
         regime = ai_signal.get("regime", "unknown")
+        direction_pred = ai_signal.get("direction", "flat")
+        direction_conf = ai_signal.get("direction_confidence", 0.0)
         
-        # Выбор стратегии по режиму
+        # 🚀 SMART OVERRIDE: If AI is super confident, ignore Regime filters
+        if direction_conf >= 0.85:
+            print(f"🚀 AI Confidence {direction_conf:.2f} >= 0.85. OVERRIDE Regime!")
+            print(f"   Direction: {direction_pred}, Regime: {regime} (ignored)")
+            
+            # Создаем упрощенный сигнал напрямую из AI предсказания
+            if direction_pred == "long":
+                signal_type = "buy"
+                entry_price = float(data.iloc[-1]["close"])
+                sl_price = entry_price * 0.995  # 0.5% SL
+                tp_price = entry_price * 1.015  # 1.5% TP (3:1 RR)
+                
+                return {
+                    "type": signal_type,
+                    "price": entry_price,
+                    "sl": sl_price,
+                    "tp": tp_price,
+                    "reason": f"AI High Confidence Override (conf={direction_conf:.2f})",
+                    "regime": regime,
+                    "confidence": direction_conf,
+                    "risk_reduction": 1.0
+                }
+            elif direction_pred == "short":
+                signal_type = "sell"
+                entry_price = float(data.iloc[-1]["close"])
+                sl_price = entry_price * 1.005  # 0.5% SL
+                tp_price = entry_price * 0.985  # 1.5% TP (3:1 RR)
+                
+                return {
+                    "type": signal_type,
+                    "price": entry_price,
+                    "sl": sl_price,
+                    "tp": tp_price,
+                    "reason": f"AI High Confidence Override (conf={direction_conf:.2f})",
+                    "regime": regime,
+                    "confidence": direction_conf,
+                    "risk_reduction": 1.0
+                }
+        
+        # Стандартная логика: выбор стратегии по режиму
         strategy = self.strategies.get(regime)
         if not strategy:
             return None

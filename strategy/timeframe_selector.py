@@ -316,3 +316,68 @@ class TimeframeSelector:
     def reset_history(self):
         """Очищает историю решений."""
         self.decision_history.clear()
+    
+    def scan_best_timeframe(self, symbol: str, ai_client=None) -> str:
+        """
+        🏆 SMART TIMEFRAME SCANNER
+        Сканирует все доступные таймфреймы (M5, M15, H1, H4) и выбирает лучший
+        на основе AI Regime и Confidence.
+        
+        Args:
+            symbol: Торговая пара (например, "XAUUSD")
+            ai_client: AIClient для запросов к AI (если None, используется встроенный)
+        
+        Returns:
+            Лучший таймфрейм в виде строки (например, "H1")
+        
+        Logic:
+            - Trend Up/Down: +10 points (предпочитаем тренды)
+            - Volatile: +5 points (высокий risk/reward)
+            - Range: -5 points (избегаем, если возможно)
+            - Confidence > 0.8: +5 bonus points
+        """
+        if not ai_client:
+            print("⚠️  No AI client provided for scanning, using default TF")
+            return self.default_primary_tf.value
+        
+        print(f"\n🔍 SMART TIMEFRAME SCANNER: Analyzing {symbol}...")
+        
+        timeframes_to_scan = ['M5', 'M15', 'H1', 'H4']
+        scores = {}
+        
+        for tf in timeframes_to_scan:
+            try:
+                # Запрашиваем AI regime для текущего TF
+                regime_result = ai_client.predict_regime(symbol, tf)
+                regime = regime_result.get('regime', 'unknown')
+                confidence = regime_result.get('confidence', 0.0)
+                
+                # Присваиваем базовые баллы по режиму
+                if regime in ['trend_up', 'trend_down']:
+                    base_score = 10
+                elif regime == 'volatile':
+                    base_score = 5
+                elif regime == 'range':
+                    base_score = -5
+                else:
+                    base_score = 0
+                
+                # Бонус за высокую уверенность
+                confidence_bonus = 5 if confidence >= 0.8 else 0
+                
+                total_score = base_score + confidence_bonus
+                scores[tf] = total_score
+                
+                print(f"   {tf}: {regime} (conf={confidence:.2f}) → Score: {total_score}")
+                
+            except Exception as e:
+                print(f"   ❌ {tf}: Error - {e}")
+                scores[tf] = -999  # Низкий score для ошибочных TF
+        
+        # Выбираем TF с максимальным score
+        best_tf = max(scores, key=scores.get)
+        max_score = scores[best_tf]
+        
+        print(f"\n🏆 AI selected best timeframe: {best_tf} (Score: {max_score})")
+        
+        return best_tf

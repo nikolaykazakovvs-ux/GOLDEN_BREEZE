@@ -29,6 +29,10 @@ from sklearn.preprocessing import StandardScaler
 root_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(root_dir))
 
+# Import feature engineering pipeline
+from aimodule.data_pipeline.features import add_basic_features
+from aimodule.data_pipeline.features_gold import GOLD_FEATURE_COLUMNS
+
 
 def parse_args():
     """Parse command line arguments."""
@@ -96,10 +100,27 @@ def load_ohlcv_data(data_dir: Path, symbol: str, timeframe: str) -> pd.DataFrame
     parquet_path = symbol_dir / f"{timeframe}.parquet"
     
     if csv_path.exists():
-        df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
-        # Ensure index is DatetimeIndex
-        if not isinstance(df.index, pd.DatetimeIndex):
-            df.index = pd.to_datetime(df.index)
+        # Read without setting index first
+        df = pd.read_csv(csv_path)
+        
+        # Find timestamp column ('time', 'timestamp', or first column)
+        time_col = None
+        if 'time' in df.columns:
+            time_col = 'time'
+        elif 'timestamp' in df.columns:
+            time_col = 'timestamp'
+        else:
+            # Try first column if it looks like timestamps
+            first_col = df.columns[0]
+            if df[first_col].dtype == 'object':
+                time_col = first_col
+        
+        if time_col:
+            # Parse timestamps and set as index
+            df[time_col] = pd.to_datetime(df[time_col], utc=True)
+            df = df.set_index(time_col)
+        else:
+            raise ValueError(f"No timestamp column found in {csv_path}")
     elif parquet_path.exists():
         df = pd.read_parquet(parquet_path)
         df.index = pd.to_datetime(df.index)
@@ -110,28 +131,26 @@ def load_ohlcv_data(data_dir: Path, symbol: str, timeframe: str) -> pd.DataFrame
 
 
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Add technical indicators as features."""
+    """Add technical indicators as features using unified pipeline."""
     df = df.copy()
     
+    # Use integrated feature pipeline (includes SMC + Gold features)
+    df = add_basic_features(df, use_gold_features=True)
+    
+    # Add additional features specific to this dataset
     # Returns
     df['returns'] = df['close'].pct_change()
     df['log_returns'] = np.log(df['close'] / df['close'].shift(1))
     
-    # SMAs
-    df['sma_fast'] = df['close'].rolling(window=20).mean()
-    df['sma_slow'] = df['close'].rolling(window=50).mean()
-    df['sma_ratio'] = df['sma_fast'] / df['sma_slow']
+    # SMA ratio
+    if 'sma_fast' in df.columns and 'sma_slow' in df.columns:
+        df['sma_ratio'] = df['sma_fast'] / df['sma_slow']
     
-    # ATR
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = ranges.max(axis=1)
-    df['atr'] = true_range.rolling(window=14).mean()
-    df['atr_norm'] = df['atr'] / df['close']  # Normalized ATR
+    # ATR normalized
+    if 'atr' in df.columns:
+        df['atr_norm'] = df['atr'] / df['close']
     
-    # RSI
+    # RSI (additional for backward compatibility)
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -246,7 +265,11 @@ def prepare_dataset(
     # Load labels
     print(f"Loading labels from {labels_path}...")
     labels_df = pd.read_csv(labels_path)
-    labels_df['timestamp'] = pd.to_datetime(labels_df['timestamp'])
+    # Handle Unix timestamps (seconds) or datetime strings
+    try:
+        labels_df['timestamp'] = pd.to_datetime(labels_df['timestamp'], unit='s', utc=True)
+    except:
+        labels_df['timestamp'] = pd.to_datetime(labels_df['timestamp'])
     print(f"✅ Loaded {len(labels_df)} labels")
     print(f"   Label distribution: {labels_df['direction_label'].value_counts().to_dict()}")
     
@@ -261,18 +284,29 @@ def prepare_dataset(
     df = add_features(df)
     print(f"✅ Added features, {len(df)} bars after dropna")
     
-    # Feature columns
-    feature_cols = [
+    # Feature columns (now includes SMC + Gold features)
+    base_feature_cols = [
         'close', 'returns', 'log_returns',
         'sma_fast', 'sma_slow', 'sma_ratio',
         'atr', 'atr_norm',
         'rsi',
         'bb_position',
-        'volume_ratio'
+        'volume_ratio',
+        # SMC features
+        'SMC_FVG_Bullish', 'SMC_FVG_Bearish',
+        'SMC_Swing_High', 'SMC_Swing_Low'
     ]
     
+    # Add Gold features if available in dataframe
+    gold_features_in_df = [col for col in GOLD_FEATURE_COLUMNS if col in df.columns]
+    feature_cols = base_feature_cols + gold_features_in_df
+    
     print(f"\nFeature columns ({len(feature_cols)}):")
-    print(f"  {', '.join(feature_cols)}")
+    print(f"  Base features: {len(base_feature_cols)}")
+    print(f"  Gold features: {len(gold_features_in_df)}")
+    if gold_features_in_df:
+        print(f"  Gold features added: {', '.join(gold_features_in_df[:5])}{'...' if len(gold_features_in_df) > 5 else ''}")
+    print(f"  Total: {', '.join(feature_cols[:10])}{'...' if len(feature_cols) > 10 else ''}")
     
     # Create sequences
     print(f"\nCreating sequences (seq_len={seq_len})...")
