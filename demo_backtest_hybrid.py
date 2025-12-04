@@ -5,7 +5,8 @@
 
 from strategy import StrategyConfig, HybridStrategy
 from strategy.backtest_engine import BacktestEngine
-from mcp_servers.trading import market_data, MT5Connector
+from mcp_servers.trading import market_data
+from mcp_servers.trading.mt5_connector import MT5Connector
 import pandas as pd
 import numpy as np
 
@@ -153,6 +154,14 @@ def demo_backtest_from_mt5():
     print("   (This may take a few minutes...)\n")
     
     # Используем последние 1000 баров для быстрого теста
+    # Convert index to datetime if needed
+    if not isinstance(m5_data.index, pd.DatetimeIndex):
+        if 'time' in m5_data.columns:
+            m5_data['time'] = pd.to_datetime(m5_data['time'])
+            m5_data = m5_data.set_index('time')
+        else:
+            print("⚠️  Cannot find time column, using all data")
+    
     start_date = m5_data.index[-1000].strftime("%Y-%m-%d")
     end_date = m5_data.index[-1].strftime("%Y-%m-%d")
     

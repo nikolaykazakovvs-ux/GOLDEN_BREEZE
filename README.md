@@ -1,125 +1,119 @@
-# Golden Breeze - AICore_XAUUSD_v2.0 + Hybrid Strategy v1.1 (Training Pipeline)
+# 🥇 Golden Breeze - AI Trading System for XAUUSD
 
-Локальный AI-модуль для генерации торговых сигналов по золоту (XAUUSD) + гибридная торговая стратегия с мультитаймфреймовой логикой + **полный конвейер обучения v1.1**.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch 2.6+](https://img.shields.io/badge/PyTorch-2.6+-red.svg)](https://pytorch.org/)
+[![CUDA 12.4](https://img.shields.io/badge/CUDA-12.4-green.svg)](https://developer.nvidia.com/cuda-toolkit)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**🎉 Версия 2.0 - Full AI Suite + Multitimeframe + Training Pipeline:**
-- ✅ **RegimeMLModel**: ML-кластеризация режимов (KMeans/GMM)
-- ✅ **DirectionLSTM**: Улучшенная LSTM для прогноза направления
-- ✅ **HF Sentiment**: Локальная HuggingFace модель для анализа настроений
-- ✅ **Enhanced Ensemble**: Продвинутая логика принятия решений с объяснениями
-- ✅ **Training Pipeline v1.1**: 🚀 Полный конвейер обучения от MT5 → Labels → LSTM
-- ✅ **Hybrid Strategy v1.0**: Гибридная стратегия с интрабарной логикой
-- ✅ **🌐 Multitimeframe Logic**: Динамический выбор рабочего таймфрейма
-- ✅ **TimeframeSelector**: Автоматический выбор PRIMARY_TF на основе AI сигналов
-- ✅ **MT5 Integration**: Полная интеграция с MetaTrader 5
-- ✅ **Trading Metrics**: 9 торговых метрик с расширенной аналитикой
+Локальный AI-модуль для генерации торговых сигналов по золоту (XAUUSD) с мультитаймфреймовой логикой и полным конвейером обучения.
 
-## 🚀 Три уровня AI
+## 🚀 Model v4 Lite Performance (Latest)
 
-### 1. Regime ML Model (Market Regime Detector)
-- **Технология**: KMeans или GaussianMixture (scikit-learn)
+| Метрика | V3 LSTM | V4 Lite Distilled |
+|---------|---------|-------------------|
+| **Test MCC** | 0.1224 | **0.1495** ✅ |
+| **Accuracy** | 62.2% | 57.4% |
+| **Architecture** | LSTM | Transformer |
+| **Parameters** | 53K | 83K |
+
+**V4 Lite** обучена через Knowledge Distillation от V3, превзошла teacher на **+22%** по MCC!
+
+### 🆕 V4 Features
+- ✅ Transformer architecture (2 encoder layers)
+- ✅ 15 engineered features + 33 strategy signals + 8 SMC
+- ✅ Knowledge Distillation from V3 LSTM
+- ✅ 2-class classification (DOWN/UP)
+
+---
+
+## ✨ Ключевые возможности
+
+### 🧠 AI Models
+| Модель | Архитектура | MCC | Статус |
+|--------|-------------|-----|--------|
+| **V4 Lite Distilled** | Transformer + Distillation | 0.15 | ✅ **Latest** |
+| **Direction LSTM v3** | 2-Layer LSTM | 0.12 | ✅ Production |
+| **V4 Full Transformer** | Dual-Stream Fusion | 0.00 | ❌ Broken |
+| **Regime ML** | KMeans/GMM clustering | — | ✅ Ready |
+| **Sentiment Engine** | HuggingFace + Lexicon | — | ✅ Ready |
+
+### 📊 Features
+- ✅ **V4 Lite**: Transformer с Knowledge Distillation
+- ✅ **Gold-Optimized Features**: 15 инженерных признаков
+- ✅ **Strategy Signals**: 33 сигнала стратегий
+- ✅ **Smart Money Concepts (SMC)**: 8 статических признаков
+- ✅ **GPU Acceleration**: CUDA 12.4, RTX 3070
+- ✅ **MT5 Integration**: Real-time data from MetaTrader 5
+
+## 🚀 AI Models Overview
+
+### 1. V4 Lite Distilled (Latest) ⭐
+- **Архитектура**: Transformer (2 encoder layers, 4 heads)
+- **Признаки**: 15 engineered + 33 strategy signals + 8 SMC
+- **Метод**: Knowledge Distillation от V3 LSTM
+- **Модель**: `models/v4_lite_distilled.pt` (83K параметров)
+- **Результат**: MCC 0.1495, превосходит V3!
+
+### 2. Direction LSTM v3 (Teacher)
+- **Архитектура**: 2-Layer LSTM, 64 hidden units, dropout 0.3
+- **Признаки**: 11 (close, returns, sma, atr, rsi, bb_position...)
+- **Модель**: `models/direction_lstm_hybrid_XAUUSD.pt` (53K параметров)
+- **Результат**: MCC 0.1224
+
+### 3. V4 Full Transformer (Deprecated)
+- **Архитектура**: Dual-Stream Sliding-Patch Transformer
+- **Проблема**: Collapsed (MCC=0.0, предсказывает только 1 класс)
+- **Статус**: ❌ Заменён на V4 Lite
+
+### 4. Regime ML Model
+- **Технология**: KMeans/GaussianMixture (scikit-learn)
 - **Признаки**: returns, ATR, SMA slope, volatility
-- **Обучение**: `python -m aimodule.training.train_regime_model`
 - **Модель**: `models/regime_ml.pkl`
-- **Fallback**: RegimeClusterModel (простая кластеризация)
 
-### 2. Direction LSTM Model
-- **Технология**: PyTorch LSTM (2 слоя, 64 hidden units)
-- **Признаки**: close, returns, sma_fast, sma_slow, atr, volume
-- **Обучение**: `python -m aimodule.training.train_direction_model`
-- **Модель**: `models/direction_lstm.pt`
-- **Fallback**: Базовая LSTM или momentum
+### 5. Sentiment Engine
+- **Уровень 1**: HuggingFace (twitter-roberta-base-sentiment)
+- **Уровень 2**: Lexicon model
+- **Уровень 3**: Regime-based fallback
 
-### 3. Sentiment Engine
-- **Уровень 1**: HuggingFace модель (twitter-roberta-base-sentiment)
-- **Уровень 2**: Lexicon модель (word-weight dictionary)
-- **Уровень 3**: Regime-based baseline
-- **Источники**: Mock news (расширяемо до NewsAPI, RSS, Twitter)
-
-## Структура проекта
+## 📁 Project Structure
 
 ```
 Golden Breeze/
-├── requirements.txt
-├── run_install_ai.ps1          # Установка зависимостей
-├── run_tests.ps1               # Запуск тестов
-├── test_ai_core.py             # Тесты AI-ядра
-├── tools/                      # 🆕 Утилиты для обучения
-│   ├── __init__.py
-│   ├── export_mt5_history.py   # Экспорт данных из MT5
-│   └── train_and_backtest_hybrid.py  # 🚀 Главный оркестратор v1.1
-├── aimodule/                   # AI Core
-│   ├── __init__.py
-│   ├── config.py
-│   ├── utils.py
-│   ├── data_pipeline/
-│   │   ├── __init__.py
-│   │   ├── loader.py
-│   │   └── features.py
+├── aimodule/                    # AI Core
 │   ├── models/
-│   │   ├── __init__.py
-│   │   ├── regime_model.py          # Базовая кластеризация
-│   │   ├── regime_ml_model.py       # 🆕 ML кластеризация (KMeans/GMM)
-│   │   ├── direction_model.py       # Базовая LSTM
-│   │   ├── direction_lstm_model.py  # 🆕 Улучшенная LSTM
-│   │   ├── sentiment_model.py       # Lexicon модель
-│   │   ├── sentiment_hf_model.py    # 🆕 HuggingFace модель
-│   │   └── sentiment_engine.py      # 🆕 Unified sentiment
-│   ├── sentiment_source/            # 🆕 Источники новостей
-│   │   ├── __init__.py
-│   │   └── news_source.py
-│   ├── training/                    # 🆕 Скрипты обучения v1.1
-│   │   ├── __init__.py
-│   │   ├── generate_labels.py       # 🚀 Генерация меток из HybridStrategy
-│   │   ├── prepare_direction_dataset.py  # 🚀 Подготовка датасета
-│   │   ├── train_direction_lstm_from_labels.py  # 🚀 Обучение LSTM
-│   │   ├── train_regime_model.py    # Legacy: обучение Regime ML
-│   │   ├── train_direction_model.py # Legacy: обучение Direction LSTM
-│   │   ├── train_regime_cluster.py  # Legacy: простая кластеризация
-│   │   └── train_direction_lstm.py  # Legacy: базовая LSTM
-│   ├── inference/
-│   │   ├── __init__.py
-│   │   ├── predict_regime.py
-│   │   ├── predict_direction.py
-│   │   └── combine_signals.py       # 🆕 Enhanced с reasons
-│   └── server/
-│       ├── __init__.py
-│       └── local_ai_gateway.py      # v2.0 API
-├── strategy/                        # 🆕 Hybrid Strategy v1.0 + Multitimeframe
-│   ├── __init__.py
-│   ├── config.py                    # StrategyConfig (+ multitf params)
-│   ├── intrabar_engine.py           # Интрабарная логика
-│   ├── regime_strategies.py         # Trend/Range/Volatile
-│   ├── risk_manager.py              # Risk Management
-│   ├── ai_client.py                 # AI Core integration (+ multitf)
-│   ├── timeframe_selector.py        # 🌐 Динамический выбор PRIMARY_TF
-│   ├── hybrid_strategy.py           # Главный класс (+ multitf)
-│   ├── backtest_engine.py           # Backtesting (+ multitf data)
-│   └── README.md                    # Документация стратегии
-├── mcp_servers/                     # 🆕 MCP Servers
-│   ├── __init__.py
-│   ├── core/                        # CORE layer (fs, git, shell, python)
-│   └── trading/                     # TRADING layer (market_data, trade_history, metrics)
-├── data/                            # 🆕 Данные для обучения
-│   ├── raw/                         # Экспортированные данные MT5
-│   │   └── {symbol}/
-│   │       ├── M1.csv
-│   │       ├── M5.csv
-│   │       └── ...
-│   ├── labels/                      # Метки из бэктеста
-│   │   └── direction_labels_{symbol}.csv
-│   └── prepared/                    # Подготовленные датасеты
-│       └── direction_dataset_{symbol}.npz
-├── models/                          # Обученные модели
-│   ├── direction_lstm_hybrid_{symbol}.pt  # 🚀 Новая модель v1.1
-│   ├── direction_lstm_hybrid_{symbol}.json  # Метаданные
-│   ├── regime_ml.pkl               # Legacy Regime ML
-│   └── direction_lstm.pt           # Legacy Direction LSTM
-├── reports/                         # 🆕 Отчёты обучения
-│   └── hybrid_v1.1_{symbol}_{timestamp}.md
-├── MULTITIMEFRAME_SPECIFICATION.md  # 🌐 Документация мультитаймфрейма
+│   │   ├── direction_lstm_model.py    # LSTM v3
+│   │   └── v4_transformer/            # 🆕 Fusion Transformer v4
+│   │       ├── config.py              # V4Config
+│   │       ├── embeddings.py          # SlidingPatchEmbed, SMCEmbed
+│   │       ├── fusion.py              # GatedCrossAttention
+│   │       └── model.py               # GoldenBreezeFusionV4
+│   ├── data_pipeline/
+│   │   ├── features.py                # Base features
+│   │   ├── features_gold.py           # Gold-specific features
+│   │   └── features_smc.py            # SMC features
+│   ├── training/                      # Training scripts
+│   ├── inference/                     # Prediction modules
+│   └── server/                        # FastAPI gateway
+├── strategy/                          # Hybrid Strategy v1.1
+│   ├── hybrid_strategy.py             # Main strategy class
+│   ├── timeframe_selector.py          # Dynamic TF selection
+│   ├── risk_manager.py                # Risk management
+│   └── backtest_engine.py             # Backtesting
+├── models/                            # Trained models
+│   ├── direction_lstm_gold_v3.pt      # ⭐ Production model
+│   └── direction_lstm_gold_v3.json    # Metadata
+├── data/
+│   ├── raw/XAUUSD/                    # MT5 exported data
+│   ├── labels/                        # Training labels
+│   └── prepared/                      # Prepared datasets
+├── docs/
+│   ├── v4_PAT_ARCHITECTURE.md         # 🆕 v4 documentation
+│   └── ...
+├── mcp_servers/                       # MCP Servers
+├── reports/                           # Training reports
+├── MODEL_V3_REPORT.md                 # v3 final report
+├── TECHNICAL_SPEC_v4_FUSION_TRANSFORMER.md  # 🆕 v4 spec
 └── README.md
-```
 
 ## Установка
 

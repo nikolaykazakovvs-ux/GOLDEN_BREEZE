@@ -30,7 +30,12 @@ sentiment_engine = SentimentEngine(use_hf_model=False)
 feedback_store = FeedbackStore()
 online_updater = OnlineUpdater(feedback_store=feedback_store)
 
-from ..config import DEVICE, USE_GPU
+from ..config import (
+    DEVICE,
+    USE_GPU,
+    DIRECTION_LSTM_MODEL_PATH,
+    DIRECTION_LSTM_METADATA_PATH,
+)
 
 app = FastAPI(title="AICore_XAUUSD_v3.0", version="3.0.0")
 
@@ -46,23 +51,50 @@ def health() -> Dict:
     }
     
     # Add direction model metadata if available
-    from ..config import MODELS_DIR
-    direction_meta_path = MODELS_DIR / "direction_lstm_hybrid_XAUUSD.json"
+    direction_meta_path = Path(DIRECTION_LSTM_METADATA_PATH)
     if direction_meta_path.exists():
         try:
             with open(direction_meta_path, 'r') as f:
                 meta = json.load(f)
                 response["direction_model"] = {
+                    "name": Path(DIRECTION_LSTM_MODEL_PATH).name,
                     "type": meta.get("model_type", "unknown"),
                     "training_date": meta.get("training_date", "unknown"),
-                    "test_accuracy": meta.get("test_metrics", {}).get("accuracy"),
-                    "test_mcc": meta.get("test_metrics", {}).get("mcc"),
+                    "symbol": meta.get("symbol", "XAUUSD"),
+                    "timeframe": meta.get("timeframe", "M5"),
                     "seq_len": meta.get("seq_len"),
+                    "epochs": meta.get("epochs_trained"),
+                    "test_accuracy": meta.get("test_metrics", {}).get("accuracy"),
+                    "test_f1_macro": meta.get("test_metrics", {}).get("f1_macro"),
+                    "test_mcc": meta.get("test_metrics", {}).get("mcc"),
+                    "best_val_mcc": meta.get("best_val_mcc"),
                 }
         except Exception:
             pass
     
     return response
+
+
+@app.get("/debug_direction")
+def debug_direction():
+    """Debug endpoint to test direction prediction directly"""
+    import pandas as pd
+    from pathlib import Path
+    
+    # Load test data
+    data_path = Path("data/raw/XAUUSD/M5.csv")
+    df = pd.read_csv(data_path)
+    df_test = df.tail(100)
+    
+    # Get direction prediction
+    direction, confidence = infer_direction(df_test)
+    
+    return {
+        "direction": direction.value if hasattr(direction, 'value') else str(direction),
+        "confidence": float(confidence),
+        "data_shape": df_test.shape,
+        "data_columns": df_test.columns.tolist()
+    }
 
 
 @app.post("/predict", response_model=PredictionResponse)
@@ -79,6 +111,7 @@ def predict(req: PredictionRequest):
         
         # Определение направления
         direction, confidence = infer_direction(df)
+        print(f"[DEBUG local_ai_gateway] infer_direction returned: direction={direction}, confidence={confidence:.8f}")
         
         # Анализ sentiment через unified engine
         sentiment = sentiment_engine.get_sentiment(req.symbol, regime, context_text=None)

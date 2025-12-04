@@ -1,0 +1,65 @@
+{
+  "model_type": "DirectionLSTM",
+  "training_date": "2025-12-03 05:34:31",
+  "dataset_path": "data/prepared/direction_dataset_gold_v3.npz",
+  "seq_len": 50,
+  "hidden_size": 64,
+  "num_layers": 2,
+  "dropout": 0.3,
+  "n_features": 32,
+  "n_classes": 2,
+  "feature_cols": [
+    "close",
+    "returns",
+    "log_returns",
+    "sma_fast",
+    "sma_slow",
+    "sma_ratio",
+    "atr",
+    "atr_norm",
+    "rsi",
+    "bb_position",
+    "volume_ratio",
+    "SMC_FVG_Bullish",
+    "SMC_FVG_Bearish",
+    "SMC_Swing_High",
+    "SMC_Swing_Low",
+    "AlphaTrend_Upper",
+    "AlphaTrend_Lower",
+    "AlphaTrend_Signal",
+    "Bullish_OB",
+    "Bearish_OB",
+    "BOS_Bullish",
+    "BOS_Bearish",
+    "Liquidity_Grab",
+    "EMA_20",
+    "EMA_50",
+    "EMA_200",
+    "Above_200EMA",
+    "EMA_Crossover",
+    "Support_4H",
+    "Resistance_4H",
+    "Distance_To_Support",
+    "Distance_To_Resistance"
+  ],
+  "symbol": "XAUUSD",
+  "timeframe": "M5",
+  "epochs_trained": 34,
+  "best_val_mcc": 0.7604324121128083,
+  "test_metrics": {
+    "accuracy": 0.8759309718437784,
+    "f1_macro": 0.8756183207637181,
+    "mcc": 0.7512998688511976,
+    "loss": 0.33700036867098376
+  },
+  "confusion_matrix": [
+    [
+      2549,
+      358
+    ],
+    [
+      325,
+      2273
+    ]
+  ]
+}

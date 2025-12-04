@@ -19,6 +19,7 @@ from torch import nn
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import logging
 from typing import Tuple, Optional, Dict, Any
 import json
 import time
@@ -26,17 +27,21 @@ import random
 from sklearn.metrics import f1_score, matthews_corrcoef, accuracy_score
 
 from ..utils import Direction
-from ..config import DIRECTION_LSTM_MODEL_PATH, DEVICE
+from ..config import (
+    DIRECTION_LSTM_MODEL_PATH,
+    DIRECTION_LSTM_METADATA_PATH,
+    DEVICE,
+    PROJECT_ROOT,
+)
 
 
 class DirectionLSTMModel(nn.Module):
     """
     Улучшенная LSTM модель для классификации направления.
     
-    Архитектура:
-    - LSTM слои с dropout
-    - Fully connected слои
-    - Softmax выход для 3 классов [FLAT, LONG, SHORT]
+    Поддерживает две головы:
+    - two_layer: FC1 + ReLU + FC2 (старый формат)
+    - single_layer: единственный FC (новый обучающий пайплайн v1.1)
     """
     
     def __init__(
@@ -45,13 +50,16 @@ class DirectionLSTMModel(nn.Module):
         hidden_size: int = 64,
         num_layers: int = 2,
         num_classes: int = 3,
-        dropout: float = 0.2
+        dropout: float = 0.2,
+        head_type: str = "two_layer"
     ):
         super().__init__()
         
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
+        self.num_classes = num_classes
+        self.head_type = head_type
         
         self.lstm = nn.LSTM(
             input_size=input_size,
@@ -62,32 +70,27 @@ class DirectionLSTMModel(nn.Module):
         )
         
         self.dropout = nn.Dropout(dropout)
-        self.fc1 = nn.Linear(hidden_size, hidden_size // 2)
         self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size // 2, num_classes)
+        
+        if head_type == "single_layer":
+            self.fc = nn.Linear(hidden_size, num_classes)
+        else:
+            self.fc1 = nn.Linear(hidden_size, max(2, hidden_size // 2))
+            self.fc2 = nn.Linear(max(2, hidden_size // 2), num_classes)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass.
-        
-        Args:
-            x: (batch, seq_len, input_size)
-            
-        Returns:
-            logits: (batch, num_classes)
-        """
-        # LSTM
-        lstm_out, _ = self.lstm(x)  # (batch, seq_len, hidden_size)
-        
-        # Берём последний таймстеп
-        last_hidden = lstm_out[:, -1, :]  # (batch, hidden_size)
-        
-        # FC layers
+        """Forward pass."""
+        lstm_out, _ = self.lstm(x)
+        last_hidden = lstm_out[:, -1, :]
         out = self.dropout(last_hidden)
-        out = self.fc1(out)
-        out = self.relu(out)
-        out = self.dropout(out)
-        logits = self.fc2(out)
+        
+        if self.head_type == "single_layer":
+            logits = self.fc(out)
+        else:
+            out = self.fc1(out)
+            out = self.relu(out)
+            out = self.dropout(out)
+            logits = self.fc2(out)
         
         return logits
 
@@ -110,6 +113,8 @@ class DirectionLSTMWrapper:
         num_layers: int = 2,
         seq_length: int = 50,
         dropout: float = 0.2,
+        num_classes: int = 3,
+        head_type: str = "two_layer",
         epsilon: float = 0.0005,
         seed: int = 42
     ):
@@ -119,6 +124,8 @@ class DirectionLSTMWrapper:
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.dropout = dropout
+        self.num_classes = num_classes
+        self.head_type = head_type
         self.epsilon = epsilon
         self.seed = seed
         self._set_seed(seed)
@@ -127,7 +134,9 @@ class DirectionLSTMWrapper:
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
-            dropout=dropout
+            dropout=dropout,
+            num_classes=num_classes,
+            head_type=head_type
         ).to(self.device)
 
         self.scaler_mean = None
@@ -146,19 +155,53 @@ class DirectionLSTMWrapper:
     def _extract_features(self, df: pd.DataFrame) -> Optional[np.ndarray]:
         """Извлечение признаков.
 
-        Используем расширенный набор, ожидаемый после prepare_training_dataframe():
-        close, log_returns, volatility, sma_slope, price_position, rsi.
-        Если чего-то нет — подставляем безопасные значения.
+        Используем полный набор из 15 признаков (с SMC features):
+        close, returns, log_returns, sma_fast, sma_slow, sma_ratio,
+        atr, atr_norm, rsi, bb_position, volume_ratio,
+        SMC_FVG_Bullish, SMC_FVG_Bearish, SMC_Swing_High, SMC_Swing_Low.
+        
+        Если признаков нет в df - подставляем безопасные значения.
         """
         if len(df) == 0:
             return None
-        close = df.get("close", pd.Series([0.0]*len(df))).astype(float).fillna(method="ffill").fillna(0).values
+        
+        # Базовые признаки
+        close = df.get("close", pd.Series([0.0]*len(df))).astype(float).ffill().fillna(0).values
+        returns = df.get("returns", pd.Series([0.0]*len(df))).astype(float).fillna(0).values
         log_returns = df.get("log_returns", pd.Series([0.0]*len(df))).astype(float).fillna(0).values
-        volatility = df.get("volatility", pd.Series([0.0]*len(df))).astype(float).fillna(0).values
-        sma_slope = df.get("sma_slope", pd.Series([0.0]*len(df))).astype(float).fillna(0).values
-        price_position = df.get("price_position", pd.Series([0.5]*len(df))).astype(float).fillna(0.5).values
+        
+        # SMA features
+        sma_fast = df.get("sma_fast", pd.Series([0.0]*len(df))).astype(float).ffill().fillna(0).values
+        sma_slow = df.get("sma_slow", pd.Series([0.0]*len(df))).astype(float).ffill().fillna(0).values
+        sma_ratio = df.get("sma_ratio", pd.Series([1.0]*len(df))).astype(float).fillna(1.0).values
+        
+        # Volatility features
+        atr = df.get("atr", pd.Series([0.0]*len(df))).astype(float).fillna(0).values
+        atr_norm = df.get("atr_norm", pd.Series([0.0]*len(df))).astype(float).fillna(0).values
+        
+        # Indicators
         rsi = df.get("rsi", pd.Series([50.0]*len(df))).astype(float).fillna(50.0).values
-        features = np.stack([close, log_returns, volatility, sma_slope, price_position, rsi], axis=1)
+        bb_position = df.get("bb_position", pd.Series([0.5]*len(df))).astype(float).fillna(0.5).values
+        volume_ratio = df.get("volume_ratio", pd.Series([1.0]*len(df))).astype(float).fillna(1.0).values
+        
+        # SMC features
+        smc_fvg_bullish = df.get("SMC_FVG_Bullish", pd.Series([0.0]*len(df))).astype(float).fillna(0).values
+        smc_fvg_bearish = df.get("SMC_FVG_Bearish", pd.Series([0.0]*len(df))).astype(float).fillna(0).values
+        smc_swing_high = df.get("SMC_Swing_High", pd.Series([0.0]*len(df))).astype(float).fillna(0).values
+        smc_swing_low = df.get("SMC_Swing_Low", pd.Series([0.0]*len(df))).astype(float).fillna(0).values
+        
+        # Stack all 15 features
+        features = np.stack([
+            close, returns, log_returns,
+            sma_fast, sma_slow, sma_ratio,
+            atr, atr_norm,
+            rsi,
+            bb_position,
+            volume_ratio,
+            smc_fvg_bullish, smc_fvg_bearish,
+            smc_swing_high, smc_swing_low
+        ], axis=1)
+        
         return features.astype(np.float32)
     
     def _normalize(self, features: np.ndarray, fit: bool = False) -> np.ndarray:
@@ -347,11 +390,15 @@ class DirectionLSTMWrapper:
         Предсказание направления с вероятностью.
         
         Args:
-            df: DataFrame с последними свечами
+            df: DataFrame с последними свечами (raw OHLCV)
             
         Returns:
             (Direction, confidence)
         """
+        # Применяем feature engineering перед извлечением признаков
+        from ..data_pipeline.features import add_basic_features
+        df = add_basic_features(df.copy())
+        
         features = self._extract_features(df)
         if features is None or len(features) < self.seq_length:
             return Direction.FLAT, 0.0
@@ -373,8 +420,14 @@ class DirectionLSTMWrapper:
         idx = int(np.argmax(probs))
         confidence = float(np.max(probs))
         
-        direction_map = {0: Direction.FLAT, 1: Direction.LONG, 2: Direction.SHORT}
-        return direction_map[idx], confidence
+        # Debug output
+        print(f"[DEBUG DirectionLSTMWrapper] probs={probs.tolist()}, confidence={confidence:.8f}, idx={idx}")
+        
+        if self.num_classes == 2:
+            direction_map = {0: Direction.LONG, 1: Direction.SHORT}
+        else:
+            direction_map = {0: Direction.FLAT, 1: Direction.LONG, 2: Direction.SHORT}
+        return direction_map.get(idx, Direction.FLAT), confidence
     
     def _save_checkpoint(self, path: Path, state: Dict[str, Any]):
         path = Path(path)
@@ -411,29 +464,121 @@ class DirectionLSTMWrapper:
             'input_size': self.input_size,
             'hidden_size': self.hidden_size,
             'num_layers': self.num_layers,
+            'num_classes': self.num_classes,
             'epsilon': self.epsilon,
-            'seed': self.seed
+            'seed': self.seed,
+            'dropout': self.dropout,
+            'head_type': self.head_type
         }
         self._save_checkpoint(Path(path), state)
     
+    @staticmethod
+    def _resolve_metadata_path(model_path: Path) -> Path:
+        if DIRECTION_LSTM_METADATA_PATH.exists():
+            return DIRECTION_LSTM_METADATA_PATH
+        candidate = model_path.with_suffix(".json")
+        return candidate if candidate.exists() else candidate
+
+    @staticmethod
+    def _load_metadata(meta_path: Path) -> Dict[str, Any]:
+        if meta_path and meta_path.exists():
+            try:
+                with meta_path.open("r", encoding="utf-8") as fp:
+                    return json.load(fp)
+            except Exception:
+                pass
+        return {}
+
+    @staticmethod
+    def _load_scalers_from_metadata(metadata: Dict[str, Any]) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        dataset_path = metadata.get("dataset_path")
+        if not dataset_path:
+            return None, None
+        dataset_file = Path(dataset_path)
+        if not dataset_file.is_absolute():
+            dataset_file = (PROJECT_ROOT / dataset_file).resolve()
+        if not dataset_file.exists():
+            return None, None
+        try:
+            with np.load(dataset_file, allow_pickle=True) as data:
+                mean = data["scaler_mean"] if "scaler_mean" in data.files else None
+                scale_key = "scaler_scale" if "scaler_scale" in data.files else "scaler_std" if "scaler_std" in data.files else None
+                scale = data[scale_key] if scale_key else None
+                if mean is not None and scale is not None:
+                    return np.array(mean), np.array(scale)
+        except Exception:
+            return None, None
+        return None, None
+
     @classmethod
-    def load(cls, path: Optional[str] = None) -> 'DirectionLSTMWrapper':
+    def load(cls, path: Optional[str] = None, metadata_path: Optional[Path] = None) -> 'DirectionLSTMWrapper':
         if path is None:
             path = DIRECTION_LSTM_MODEL_PATH
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"Модель не найдена: {path}")
+
         checkpoint = torch.load(path, map_location='cpu')
+        meta_path = metadata_path or cls._resolve_metadata_path(path)
+        metadata = cls._load_metadata(meta_path)
+
+        is_mapping = isinstance(checkpoint, dict)
+        state_dict = checkpoint.get('model_state') if is_mapping else None
+        if state_dict is None:
+            state_dict = checkpoint
+
+        scaler_mean = checkpoint.get('scaler_mean') if is_mapping else None
+        scaler_std = None
+        if is_mapping:
+            scaler_std = checkpoint.get('scaler_std') or checkpoint.get('scaler_scale')
+
+        if scaler_mean is None or scaler_std is None:
+            meta_mean, meta_std = cls._load_scalers_from_metadata(metadata)
+            scaler_mean = scaler_mean or meta_mean
+            scaler_std = scaler_std or meta_std
+
+        head_type = "single_layer" if any(str(k).startswith("fc.") for k in state_dict.keys()) else "two_layer"
+        if any(str(k).startswith("fc1.") for k in state_dict.keys()):
+            head_type = "two_layer"
+        if any(str(k).startswith("fc2.") for k in state_dict.keys()) and not any(str(k).startswith("fc.") for k in state_dict.keys()):
+            head_type = "two_layer"
+
+        inferred_classes = metadata.get('n_classes') or (checkpoint.get('num_classes') if is_mapping else None)
+        if inferred_classes is None:
+            if head_type == "single_layer" and 'fc.bias' in state_dict:
+                inferred_classes = state_dict['fc.bias'].shape[0]
+            elif head_type == "two_layer" and 'fc2.bias' in state_dict:
+                inferred_classes = state_dict['fc2.bias'].shape[0]
+        if inferred_classes is None:
+            inferred_classes = 3
+
         instance = cls(
-            input_size=checkpoint.get('input_size', 6),
-            seq_length=checkpoint.get('seq_length', 50),
-            hidden_size=checkpoint.get('hidden_size', 64),
-            num_layers=checkpoint.get('num_layers', 2),
-            epsilon=checkpoint.get('epsilon', 0.0005),
-            seed=checkpoint.get('seed', 42)
+            input_size=int(metadata.get('n_features', checkpoint.get('input_size', 6) if is_mapping else 6)),
+            seq_length=int(metadata.get('seq_len', checkpoint.get('seq_length', 50) if is_mapping else 50)),
+            hidden_size=int(metadata.get('hidden_size', checkpoint.get('hidden_size', 64) if is_mapping else 64)),
+            num_layers=int(metadata.get('num_layers', checkpoint.get('num_layers', 2) if is_mapping else 2)),
+            dropout=float(metadata.get('dropout', checkpoint.get('dropout', 0.2) if is_mapping else 0.2)),
+            num_classes=int(inferred_classes),
+            head_type=head_type,
+            epsilon=float(checkpoint.get('epsilon', 0.0005) if is_mapping else 0.0005),
+            seed=int(checkpoint.get('seed', 42) if is_mapping else 42)
         )
-        instance.model.load_state_dict(checkpoint['model_state'])
-        instance.scaler_mean = checkpoint['scaler_mean']
-        instance.scaler_std = checkpoint['scaler_std']
+
+        instance.model.load_state_dict(state_dict)
+
+        if scaler_mean is not None and scaler_std is not None:
+            scaler_mean = np.array(scaler_mean, dtype=np.float32)
+            scaler_std = np.array(scaler_std, dtype=np.float32)
+            if scaler_mean.ndim == 1:
+                scaler_mean = scaler_mean.reshape(1, -1)
+            if scaler_std.ndim == 1:
+                scaler_std = scaler_std.reshape(1, -1)
+            instance.scaler_mean = scaler_mean
+            instance.scaler_std = scaler_std
+        else:
+            # Безопасные значения по умолчанию
+            instance.scaler_mean = np.zeros((1, instance.input_size), dtype=np.float32)
+            instance.scaler_std = np.ones((1, instance.input_size), dtype=np.float32)
+
         instance.model.eval()
         return instance

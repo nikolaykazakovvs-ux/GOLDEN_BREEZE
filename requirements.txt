@@ -13,4 +13,5 @@ sentencepiece
 datasets
 scipy
 joblib
+requests
 pytest

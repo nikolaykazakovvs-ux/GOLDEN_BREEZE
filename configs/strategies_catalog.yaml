@@ -1,0 +1,199 @@
+version: 1.0
+project: "Golden Breeze Hybrid"
+description: >
+  Catalog of external strategies/indicators to integrate as features, filters
+  and label generators for Golden Breeze Hybrid AI core.
+
+strategies:
+
+  - id: smc_fvg_mtf
+    name: "Smart Money Concepts + Fair Value Gaps (MTF)"
+    category: "SMC / Liquidity / Structure"
+    priority: high
+    source:
+      platform: "TradingView"
+      type: "indicator"
+      url: "https://www.tradingview.com/scripts/smartmoneyconcepts/"
+      notes: >
+        Pick 1–2 open-source SMC/FVG indicators with BOS/CHOCH, order blocks,
+        premium/discount zones and multi-timeframe structure.
+    inputs:
+      - ohlcv
+      - timeframe
+      - session
+    outputs:
+      - has_fvg_up          # bool
+      - has_fvg_down        # bool
+      - structure_state     # enum: up_trend / down_trend / range / distribution
+      - in_discount_zone    # bool
+      - in_premium_zone     # bool
+      - near_liquidity_pool # bool
+    golden_breeze_role:
+      - "features_for_regime_clustering"
+      - "entry_filter_for_trend_and_range"
+      - "context_signal_for_timeframe_selector"
+    integration_plan:
+      - "Extract Pine logic into Python adapter features_smc_fvg_mtf.py"
+      - "Expose function: build_smc_features(df: DataFrame) -> DataFrame with added columns"
+      - "Wire into feature pipeline before RegimeMLModel and DirectionLSTM"
+
+  - id: session_volume_profile
+    name: "Session Volume Profile (Intraday Range / Breakout)"
+    category: "Volume Profile / Sessions"
+    priority: high
+    source:
+      platform: "TradingView"
+      type: "indicator_or_strategy"
+      url: "https://www.tradingview.com/scripts/volumeprofile/"
+      notes: >
+        Use a script that builds session volume profiles (Asia/London/NY),
+        marks value area high/low and high-volume nodes.
+    inputs:
+      - ohlcv
+      - volume
+      - session
+    outputs:
+      - session_value_area_high
+      - session_value_area_low
+      - session_vwap
+      - high_volume_nodes        # list / encoded
+      - in_value_area            # bool
+    golden_breeze_role:
+      - "signal_engine_for_range_regime"
+      - "tp_sl_target_zones"
+      - "risk_filter_during_low_liquidity"
+    integration_plan:
+      - "Implement features_session_volume_profile.py using MT5 volume data"
+      - "Add to RegimeStrategies.Range logic for entry/exit levels"
+
+  - id: vwap_bands_trend
+    name: "VWAP + Deviation Bands (Trend Filter)"
+    category: "VWAP / Dynamic Levels"
+    priority: medium
+    source:
+      platform: "TradingView"
+      type: "indicator"
+      url: "https://www.tradingview.com/scripts/vwap/"
+      notes: >
+        Classic VWAP with 1–3 standard deviation bands or custom deviations.
+    inputs:
+      - ohlcv
+      - volume
+      - session_or_daily_anchor
+    outputs:
+      - vwap
+      - vwap_upper_band
+      - vwap_lower_band
+      - price_to_vwap            # normalized distance
+      - vwap_slope               # trend of vwap
+    golden_breeze_role:
+      - "trend_regime_filter"
+      - "adaptive_tp_partial_close_levels"
+      - "avoid_counter_vwap_trades"
+    integration_plan:
+      - "Implement features_vwap_bands.py"
+      - "Use vwap_slope as additional regime feature"
+      - "Use price_to_vwap in RiskManager for partial take profit rules"
+
+  - id: orderflow_footprint_light
+    name: "Light Footprint / Orderflow Features"
+    category: "Orderflow / Delta / Imbalance"
+    priority: medium
+    source:
+      platform: "GitHub"
+      type: "python_library_or_notebook"
+      url: "https://github.com/search?q=orderflow+footprint+python&type=repositories"
+      notes: >
+        Use publicly available footprint/orderflow examples to compute delta,
+        imbalance and absorption features without rendering full footprint charts.
+    inputs:
+      - tick_data_or_M1_with_volume
+    outputs:
+      - buy_volume
+      - sell_volume
+      - delta_volume
+      - volume_imbalance_score
+      - absorption_flag
+    golden_breeze_role:
+      - "intrabar_features_for_IntrabarEngine"
+      - "filter_for_fake_breakouts"
+      - "additional_features_for_DirectionLSTM"
+    integration_plan:
+      - "Implement features_orderflow_light.py using MT5 tick or M1 data"
+      - "Integrate into intrabar_engine and training dataset builder"
+
+  - id: finrl_drl_direction
+    name: "FinRL DRL Ensemble Direction (Research)"
+    category: "Deep Reinforcement Learning"
+    priority: experimental
+    source:
+      platform: "GitHub"
+      type: "framework"
+      url: "https://github.com/AI4Finance-Foundation/FinRL"
+      notes: >
+        Use FinRL as an external lab to train DRL agent on XAUUSD and compare
+        policy outputs with DirectionLSTM. Do not embed full FinRL into core.
+    inputs:
+      - feature_matrix_from_hybrid_pipeline
+      - reward_definitions
+    outputs:
+      - action_label   # long / short / flat
+      - action_confidence_optional
+    golden_breeze_role:
+      - "benchmark_direction_model"
+      - "source_of_rule_hints_for_hardcoded_strategies"
+    integration_plan:
+      - "Create external experiment notebook using FinRL"
+      - "Export learned policy logic as simple rules/features if it outperforms baseline"
+
+  - id: mlfinlab_triple_barrier_labels
+    name: "Triple-Barrier Meta-Labels (mlfinlab)"
+    category: "Labeling / Meta-Labeling"
+    priority: high
+    source:
+      platform: "GitHub"
+      type: "python_library"
+      url: "https://github.com/hudson-and-thames/mlfinlab"
+      notes: >
+        Use triple-barrier method to generate robust long/short/no-trade labels,
+        more informative than simple next-candle direction.
+    inputs:
+      - ohlcv
+      - volatility_estimate
+      - horizon_config
+      - profit_target
+      - stop_loss
+    outputs:
+      - meta_label     # 1=long, -1=short, 0=no-trade
+      - event_end_time
+    golden_breeze_role:
+      - "improved_training_labels_for_DirectionLSTM"
+      - "better no-trade detection"
+    integration_plan:
+      - "Extend generate_labels.py to support triple-barrier labeling"
+      - "Store labels in direction_labels_meta.csv and use in prepare_direction_dataset.py"
+
+  - id: pine_nn_bridge
+    name: "Pine Neural Net Bridge (weights export)"
+    category: "NN Weights Porting"
+    priority: low
+    source:
+      platform: "TradingView / GitHub"
+      type: "example"
+      url: "https://www.tradingview.com/search/?q=neural%20network%20pine"
+      notes: >
+        Example scripts show how to embed fixed NN weights in Pine.
+        Use the idea in reverse: train in PyTorch and export weights to Pine
+        for visualization of Golden Breeze signals.
+    inputs:
+      - hidden_layer_weights
+      - feature_vector_from_chart
+    outputs:
+      - nn_signal_value
+      - nn_signal_direction
+    golden_breeze_role:
+      - "visualization_of_AI_signals_in_TradingView"
+      - "communication_tool_for_humans_not_core_logic"
+    integration_plan:
+      - "Add export_weights_to_pine.py for DirectionLSTM simplified proxy model"
+      - "Provide Pine template for displaying model-based signals on chart"

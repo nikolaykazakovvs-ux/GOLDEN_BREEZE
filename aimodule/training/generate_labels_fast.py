@@ -42,8 +42,15 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['bb_upper'] = df['bb_mid'] + 2 * bb_std
     df['bb_lower'] = df['bb_mid'] - 2 * bb_std
     
-    # Volume ratio
-    df['volume_ratio'] = df['volume'] / df['volume'].rolling(20).mean()
+    # Volume ratio (use tick_volume if volume not available)
+    if 'tick_volume' in df.columns:
+        df['volume_ratio'] = df['tick_volume'] / df['tick_volume'].rolling(20).mean()
+    elif 'real_volume' in df.columns:
+        df['volume_ratio'] = df['real_volume'] / df['real_volume'].rolling(20).mean()
+    elif 'volume' in df.columns:
+        df['volume_ratio'] = df['volume'] / df['volume'].rolling(20).mean()
+    else:
+        df['volume_ratio'] = 1.0
     
     return df
 
@@ -95,8 +102,25 @@ def load_timeframe_data(data_dir: Path, symbol: str) -> Dict[str, pd.DataFrame]:
         if not csv_path.exists():
             print(f"⚠️  {tf} data not found: {csv_path}")
             continue
-            
-        df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+        
+        # Read CSV and find timestamp column
+        df = pd.read_csv(csv_path)
+        
+        # Find timestamp column ('time', 'timestamp', or first column)
+        time_col = None
+        if 'time' in df.columns:
+            time_col = 'time'
+        elif 'timestamp' in df.columns:
+            time_col = 'timestamp'
+        
+        if time_col:
+            # Parse timestamps and set as index
+            df[time_col] = pd.to_datetime(df[time_col], utc=True)
+            df = df.set_index(time_col)
+        else:
+            print(f"⚠️  No time column found in {csv_path}, skipping")
+            continue
+        
         print(f"✅ Loaded {tf}: {len(df)} bars from {csv_path}")
         
         # Add indicators
@@ -144,12 +168,10 @@ def generate_labels_from_data(
     
     # Prepare output - keep timestamp as column (not index)
     output_df = labeled_df[['direction_label']].copy()
-    output_df['timestamp'] = labeled_df.index
+    # Convert index to datetime string (ISO format) for CSV storage
+    output_df['timestamp'] = pd.to_datetime(labeled_df.index).strftime('%Y-%m-%d %H:%M:%S%z')
     output_df['symbol'] = symbol
     output_df['timeframe'] = primary_tf
-    
-    # Reset index so timestamp becomes a regular column
-    output_df = output_df.reset_index(drop=True)
     
     return output_df
 

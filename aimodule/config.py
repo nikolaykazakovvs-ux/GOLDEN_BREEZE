@@ -17,12 +17,15 @@ BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
 
 # Директории
-MODELS_DIR = BASE_DIR / "models"
+MODELS_DIR = PROJECT_ROOT / "models"
 DATA_DIR = PROJECT_ROOT / "data"
 
 # Создание директорий при импорте
 MODELS_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
+
+# Инструмент по умолчанию (используется для динамических путей моделей)
+DEFAULT_SYMBOL = "XAUUSD"
 
 # GPU/CUDA настройки
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -32,7 +35,9 @@ USE_GPU = torch.cuda.is_available()
 REGIME_MODEL_PATH = MODELS_DIR / "regime_model.pt"
 REGIME_ML_MODEL_PATH = MODELS_DIR / "regime_ml.pkl"
 DIRECTION_MODEL_PATH = MODELS_DIR / "direction_model.pt"
-DIRECTION_LSTM_MODEL_PATH = MODELS_DIR / "direction_lstm.pt"
+# SMC Model v1.0 (with Fair Value Gaps and Swing Points features)
+DIRECTION_LSTM_MODEL_PATH = MODELS_DIR / f"direction_lstm_smc_v1.pt"
+DIRECTION_LSTM_METADATA_PATH = DIRECTION_LSTM_MODEL_PATH.with_suffix(".json")
 SENTIMENT_MODEL_PATH = MODELS_DIR / "sentiment_model.gguf"
 
 # Пути к данным
