@@ -20,16 +20,18 @@ Date: 2025-12-04
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from typing import Dict, List, Optional, Tuple, Union
 from pathlib import Path
 import json
+from collections import Counter
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from aimodule.data_pipeline.smc_processor import SMCProcessor
 from aimodule.data_pipeline.alignment import TimeAligner, AlignedSample
+from aimodule.data_pipeline.strategy_signals import StrategySignalsGenerator
 from aimodule.models.v4_transformer.config import V4Config
 
 
@@ -349,6 +351,7 @@ def create_dataloaders(
     val_ratio: float = 0.15,
     num_workers: int = 0,
     shuffle_train: bool = True,
+    use_weighted_sampler: bool = True,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
     Create train/val/test DataLoaders from FusionDataset.
@@ -359,7 +362,8 @@ def create_dataloaders(
         train_ratio: Training set ratio
         val_ratio: Validation set ratio
         num_workers: DataLoader workers
-        shuffle_train: Whether to shuffle training data
+        shuffle_train: Whether to shuffle training data (ignored if weighted_sampler)
+        use_weighted_sampler: Use WeightedRandomSampler for class balancing
         
     Returns:
         Tuple of (train_loader, val_loader, test_loader)
@@ -370,10 +374,82 @@ def create_dataloaders(
         shuffle=False,  # Don't shuffle for time series
     )
     
+    # Create weighted sampler for training if requested
+    sampler = None
+    if use_weighted_sampler:
+        # For FusionDatasetV2Subset, we need to get labels from parent using indices
+        labels = []
+        
+        if hasattr(train_ds, 'indices') and hasattr(train_ds, 'parent'):
+            # FusionDatasetV2Subset case
+            parent = train_ds.parent
+            if hasattr(parent, 'labels') and parent.labels is not None:
+                # Get labels using aligned_meta indices
+                for subset_idx in range(len(train_ds.indices)):
+                    parent_idx = train_ds.indices[subset_idx]
+                    if parent_idx < len(parent.aligned_meta):
+                        row = parent.aligned_meta.iloc[parent_idx]
+                        m5_idx = int(row['m5_idx'])
+                        if m5_idx < len(parent.labels):
+                            label = parent.labels[m5_idx]
+                            if label >= 0:  # Valid label
+                                labels.append(label)
+                            else:
+                                labels.append(1)  # Default to HOLD for invalid labels
+                        else:
+                            labels.append(1)
+                    else:
+                        labels.append(1)
+        elif hasattr(train_ds, 'samples'):
+            # FusionDataset case
+            for sample in train_ds.samples:
+                if sample.label is not None:
+                    labels.append(sample.label)
+        else:
+            # Fallback: try to iterate
+            for i in range(min(100, len(train_ds))):  # Sample only first 100 for speed
+                try:
+                    sample = train_ds[i]
+                    if 'label' in sample:
+                        labels.append(sample['label'].item())
+                except:
+                    break
+        
+        if len(labels) > 0:
+            # Compute class weights (inverse frequency)
+            label_counts = Counter(labels)
+            num_samples = len(labels)
+            
+            # Weight per class = total_samples / (num_classes * class_count)
+            class_weights = {}
+            for label in range(3):  # 3 classes
+                count = label_counts.get(label, 1)
+                class_weights[label] = num_samples / (3 * count)
+            
+            # Weight per sample
+            sample_weights = [class_weights.get(label, 1.0) for label in labels]
+            sample_weights = torch.tensor(sample_weights, dtype=torch.float32)
+            
+            sampler = WeightedRandomSampler(
+                weights=sample_weights,
+                num_samples=len(sample_weights),
+                replacement=True,
+            )
+            
+            print(f"\n📊 Class distribution in training set:")
+            for label in sorted(label_counts.keys()):
+                count = label_counts[label]
+                pct = count / num_samples * 100
+                weight = class_weights.get(label, 1.0)
+                print(f"   Class {label}: {count} ({pct:.1f}%) - weight: {weight:.3f}")
+            
+            shuffle_train = False  # Cannot use shuffle with sampler
+    
     train_loader = DataLoader(
         train_ds,
         batch_size=batch_size,
-        shuffle=shuffle_train,
+        shuffle=shuffle_train if sampler is None else False,
+        sampler=sampler,
         num_workers=num_workers,
         pin_memory=True,
     )
@@ -433,6 +509,7 @@ class FusionDatasetV2(Dataset):
         config: Optional[V4Config] = None,
         m5_feature_cols: List[str] = None,
         h1_feature_cols: List[str] = None,
+        strategy_signals: Optional[np.ndarray] = None,
     ):
         """
         Args:
@@ -445,6 +522,7 @@ class FusionDatasetV2(Dataset):
             config: V4Config for dimensions
             m5_feature_cols: Feature column names for M5
             h1_feature_cols: Feature column names for H1
+            strategy_signals: Strategy signals array aligned with M5 data (N_m5, n_signals)
         """
         self.aligned_meta = aligned_meta.reset_index(drop=True)
         self.m5_data = m5_data
@@ -452,6 +530,7 @@ class FusionDatasetV2(Dataset):
         self.smc_features = smc_features
         self.labels = labels
         self.config = config or V4Config()
+        self.strategy_signals = strategy_signals
         
         # SMC processor for feature extraction
         self.smc_processor = SMCProcessor(
@@ -524,6 +603,11 @@ class FusionDatasetV2(Dataset):
             'smc_static': smc_static,
             'smc_dynamic': smc_dynamic,
         }
+        
+        # Add strategy signals if available
+        if self.strategy_signals is not None and m5_idx < len(self.strategy_signals):
+            strat_sig = torch.tensor(self.strategy_signals[m5_idx], dtype=torch.float32)
+            result['strategy_signals'] = strat_sig
         
         # Add label if available
         if self.labels is not None and m5_idx < len(self.labels):
@@ -623,6 +707,13 @@ class FusionDatasetV2(Dataset):
         df_h1_sorted = df_h1.sort_values(time_col).reset_index(drop=True)
         h1_data = df_h1_sorted[h1_features].values.astype(np.float32)
         
+        # Step 3: Generate strategy signals for M5 data
+        print("Step 3: Generating strategy signals...")
+        strategy_gen = StrategySignalsGenerator()
+        strategy_df = strategy_gen.generate_all_signals(df_m5_sorted)
+        strategy_signals = strategy_df.values.astype(np.float32)
+        print(f"  Strategy signals: {strategy_signals.shape} ({strategy_gen.get_feature_dim()} features)")
+        
         # Prepare labels if available
         labels = None
         if df_labels is not None:
@@ -644,6 +735,7 @@ class FusionDatasetV2(Dataset):
             smc_features=smc_features,
             labels=labels,
             config=config,
+            strategy_signals=strategy_signals,
         )
     
     def get_splits(

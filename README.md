@@ -7,66 +7,70 @@
 
 Локальный AI-модуль для генерации торговых сигналов по золоту (XAUUSD) с мультитаймфреймовой логикой и полным конвейером обучения.
 
-## 🚀 Model v3 Performance (Production-Ready)
+## 🚀 Model v4 Lite Performance (Latest)
 
-| Метрика | Значение |
-|---------|----------|
-| **Test MCC** | 0.7513 |
-| **Accuracy** | 87.59% |
-| **Backtest ROI** | +65.76% |
-| **Profit Factor** | 1.12 |
+| Метрика | V3 LSTM | V4 Lite Distilled |
+|---------|---------|-------------------|
+| **Test MCC** | 0.1224 | **0.1495** ✅ |
+| **Accuracy** | 62.2% | 57.4% |
+| **Architecture** | LSTM | Transformer |
+| **Parameters** | 53K | 83K |
 
-**Период обучения**: 6 месяцев (Jun-Dec 2025) | **27,521 последовательностей**
+**V4 Lite** обучена через Knowledge Distillation от V3, превзошла teacher на **+22%** по MCC!
+
+### 🆕 V4 Features
+- ✅ Transformer architecture (2 encoder layers)
+- ✅ 15 engineered features + 33 strategy signals + 8 SMC
+- ✅ Knowledge Distillation from V3 LSTM
+- ✅ 2-class classification (DOWN/UP)
 
 ---
 
 ## ✨ Ключевые возможности
 
 ### 🧠 AI Models
-| Модель | Архитектура | Статус |
-|--------|-------------|--------|
-| **Direction LSTM v3** | 2-Layer LSTM, 32 Gold features | ✅ Production |
-| **Fusion Transformer v4** | Dual-Stream Sliding-Patch | 🔧 Development |
-| **Regime ML** | KMeans/GMM clustering | ✅ Ready |
-| **Sentiment Engine** | HuggingFace + Lexicon | ✅ Ready |
+| Модель | Архитектура | MCC | Статус |
+|--------|-------------|-----|--------|
+| **V4 Lite Distilled** | Transformer + Distillation | 0.15 | ✅ **Latest** |
+| **Direction LSTM v3** | 2-Layer LSTM | 0.12 | ✅ Production |
+| **V4 Full Transformer** | Dual-Stream Fusion | 0.00 | ❌ Broken |
+| **Regime ML** | KMeans/GMM clustering | — | ✅ Ready |
+| **Sentiment Engine** | HuggingFace + Lexicon | — | ✅ Ready |
 
 ### 📊 Features
-- ✅ **Gold-Optimized Features**: 32 специализированных признаков для XAUUSD
-- ✅ **Smart Money Concepts (SMC)**: Order Blocks, FVG, Market Structure
-- ✅ **GPU Acceleration**: CUDA 12.4, RTX 3070 (2.7-45x speedup)
-- ✅ **Multitimeframe Logic**: M5/M15/H1/H4 dynamic selection
+- ✅ **V4 Lite**: Transformer с Knowledge Distillation
+- ✅ **Gold-Optimized Features**: 15 инженерных признаков
+- ✅ **Strategy Signals**: 33 сигнала стратегий
+- ✅ **Smart Money Concepts (SMC)**: 8 статических признаков
+- ✅ **GPU Acceleration**: CUDA 12.4, RTX 3070
 - ✅ **MT5 Integration**: Real-time data from MetaTrader 5
-- ✅ **Risk Management**: ATR-based SL/TP, drawdown limits
-
-### 🆕 v4 Fusion Transformer (In Development)
-- 🔹 Sliding Patch Encoding (overlapping patches)
-- 🔹 Dual-Stream Processing (M5 + H1)
-- 🔹 SMC Embedding Injection
-- 🔹 Gated Cross-Attention Fusion
-- 🔹 ~1M parameters, SOTA architecture
 
 ## 🚀 AI Models Overview
 
-### 1. Direction LSTM v3 (Production) ⭐
+### 1. V4 Lite Distilled (Latest) ⭐
+- **Архитектура**: Transformer (2 encoder layers, 4 heads)
+- **Признаки**: 15 engineered + 33 strategy signals + 8 SMC
+- **Метод**: Knowledge Distillation от V3 LSTM
+- **Модель**: `models/v4_lite_distilled.pt` (83K параметров)
+- **Результат**: MCC 0.1495, превосходит V3!
+
+### 2. Direction LSTM v3 (Teacher)
 - **Архитектура**: 2-Layer LSTM, 64 hidden units, dropout 0.3
-- **Признаки**: 32 (15 базовых + 17 Gold-специфичных)
-- **Обучение**: 6 месяцев данных, 27K последовательностей
-- **Модель**: `models/direction_lstm_gold_v3.pt` (58K параметров)
-- **Результат**: MCC 0.7513, Accuracy 87.59%
+- **Признаки**: 11 (close, returns, sma, atr, rsi, bb_position...)
+- **Модель**: `models/direction_lstm_hybrid_XAUUSD.pt` (53K параметров)
+- **Результат**: MCC 0.1224
 
-### 2. Fusion Transformer v4 (Development) 🆕
+### 3. V4 Full Transformer (Deprecated)
 - **Архитектура**: Dual-Stream Sliding-Patch Transformer
-- **Fast Stream**: M5 (200 bars → 24 patches)
-- **Slow Stream**: H1 (50 bars) + SMC tokens
-- **Fusion**: Gated Cross-Attention (learnable α)
-- **Модель**: `aimodule/models/v4_transformer/` (~1M параметров)
+- **Проблема**: Collapsed (MCC=0.0, предсказывает только 1 класс)
+- **Статус**: ❌ Заменён на V4 Lite
 
-### 3. Regime ML Model
+### 4. Regime ML Model
 - **Технология**: KMeans/GaussianMixture (scikit-learn)
 - **Признаки**: returns, ATR, SMA slope, volatility
 - **Модель**: `models/regime_ml.pkl`
 
-### 4. Sentiment Engine
+### 5. Sentiment Engine
 - **Уровень 1**: HuggingFace (twitter-roberta-base-sentiment)
 - **Уровень 2**: Lexicon model
 - **Уровень 3**: Regime-based fallback

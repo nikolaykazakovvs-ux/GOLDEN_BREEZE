@@ -107,6 +107,16 @@ class GoldenBreezeFusionV4(nn.Module):
             dropout=c.dropout,
         )
         
+        # === Strategy Signals Embedding ===
+        # Embeds signals from classical trading strategies (RSI, MACD, EMA, etc.)
+        self.strategy_embed = nn.Sequential(
+            nn.Linear(c.strategy_signal_dim, c.d_model),
+            nn.GELU(),
+            nn.Dropout(c.dropout),
+            nn.Linear(c.d_model, c.d_model),
+            nn.LayerNorm(c.d_model),
+        )
+        
         # === Fast Encoder (M5 Stream) ===
         fast_encoder_layer = nn.TransformerEncoderLayer(
             d_model=c.d_model,
@@ -195,6 +205,7 @@ class GoldenBreezeFusionV4(nn.Module):
         smc_static: torch.Tensor,
         smc_dynamic: Optional[torch.Tensor] = None,
         smc_dynamic_mask: Optional[torch.Tensor] = None,
+        strategy_signals: Optional[torch.Tensor] = None,
         return_features: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """
@@ -206,6 +217,7 @@ class GoldenBreezeFusionV4(nn.Module):
             smc_static: Static SMC features (B, static_smc_dim)
             smc_dynamic: Dynamic SMC events (B, num_events, dynamic_smc_dim)
             smc_dynamic_mask: Mask for valid dynamic events (B, num_events)
+            strategy_signals: Signals from classical strategies (B, strategy_signal_dim)
             return_features: If True, also return intermediate features
             
         Returns:
@@ -262,6 +274,12 @@ class GoldenBreezeFusionV4(nn.Module):
         else:  # cls - use first token
             pooled = fused[:, 0, :]  # (B, d_model)
         
+        # === Add Strategy Signals ===
+        # Strategy signals provide explicit trading indicators (RSI, MACD, EMA, etc.)
+        if strategy_signals is not None:
+            strategy_embed = self.strategy_embed(strategy_signals)  # (B, d_model)
+            pooled = pooled + strategy_embed  # Residual connection
+        
         # === Output Heads ===
         class_logits = self.class_head(pooled)  # (B, num_classes)
         class_probs = F.softmax(class_logits, dim=-1)
@@ -292,6 +310,7 @@ class GoldenBreezeFusionV4(nn.Module):
         x_slow_ohlcv: torch.Tensor,
         smc_static: torch.Tensor,
         smc_dynamic: Optional[torch.Tensor] = None,
+        strategy_signals: Optional[torch.Tensor] = None,
     ) -> Dict[str, Union[int, float, str]]:
         """
         Simplified prediction method for inference.
@@ -304,7 +323,10 @@ class GoldenBreezeFusionV4(nn.Module):
         """
         self.eval()
         with torch.no_grad():
-            out = self.forward(x_fast_ohlcv, x_slow_ohlcv, smc_static, smc_dynamic)
+            out = self.forward(
+                x_fast_ohlcv, x_slow_ohlcv, smc_static, smc_dynamic,
+                strategy_signals=strategy_signals,
+            )
         
         class_names = ["DOWN", "HOLD", "UP"]  # Assuming class order
         pred_idx = out["predicted_class"][0].item()
@@ -330,6 +352,7 @@ class GoldenBreezeFusionV4(nn.Module):
             "fast_embed": count(self.fast_embed),
             "slow_embed": count(self.slow_embed),
             "smc_embed": count(self.smc_embed),
+            "strategy_embed": count(self.strategy_embed),
             "fast_encoder": count(self.fast_encoder),
             "slow_encoder": count(self.slow_encoder),
             "fusion": count(self.fusion),
@@ -379,6 +402,7 @@ def create_dummy_inputs(config: V4Config, batch_size: int = 2, device: str = "cp
         "x_slow_ohlcv": torch.randn(batch_size, config.seq_len_slow, config.input_channels, device=device),
         "smc_static": torch.randn(batch_size, config.static_smc_dim, device=device),
         "smc_dynamic": torch.randn(batch_size, config.max_dynamic_tokens, config.dynamic_smc_dim, device=device),
+        "strategy_signals": torch.randn(batch_size, config.strategy_signal_dim, device=device),
     }
 
 

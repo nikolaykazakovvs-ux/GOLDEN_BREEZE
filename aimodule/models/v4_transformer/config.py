@@ -73,6 +73,9 @@ class V4Config:
     
     max_dynamic_tokens: int = 10  # Max active OBs to track
     
+    # === Strategy Signals ===
+    strategy_signal_dim: int = 33  # Number of strategy signals (from StrategySignalsGenerator)
+    
     # === SMC Decay Parameters ===
     smc_decay_lambda: float = SMC_DECAY_LAMBDA
     smc_max_ob_age: int = SMC_MAX_OB_AGE_BARS
@@ -139,6 +142,7 @@ class V4Config:
             "static_smc_dim": self.static_smc_dim,
             "dynamic_smc_dim": self.dynamic_smc_dim,
             "max_dynamic_tokens": self.max_dynamic_tokens,
+            "strategy_signal_dim": self.strategy_signal_dim,
             "smc_decay_lambda": self.smc_decay_lambda,
             "smc_max_ob_age": self.smc_max_ob_age,
             "seq_len_fast": self.seq_len_fast,

@@ -204,22 +204,38 @@ class DualLoss(nn.Module):
 
 class ClassificationOnlyLoss(nn.Module):
     """
-    Classification-only loss wrapper using FocalLoss.
+    Classification-only loss wrapper using FocalLoss with label smoothing.
     
     Use this when you only have classification targets (no regression scores).
+    
+    Features:
+    - Focal Loss for handling class imbalance
+    - Label smoothing to prevent overconfidence
+    - Per-class weights for additional balancing
     """
     
     def __init__(
         self,
         alpha: float = 0.25,
         gamma: float = 2.0,
-        class_weights: Optional[torch.Tensor] = None,
+        weight: Optional[torch.Tensor] = None,
+        label_smoothing: float = 0.0,
     ):
         super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+        
+        # Register class weights as buffer (moves to device with model)
+        if weight is not None:
+            self.register_buffer('weight', weight)
+        else:
+            self.weight = None
+        
         self.focal = FocalLoss(
             alpha=alpha,
             gamma=gamma,
-            weight=class_weights,
+            weight=weight,
         )
     
     def forward(
@@ -227,7 +243,51 @@ class ClassificationOnlyLoss(nn.Module):
         logits: torch.Tensor,
         targets: torch.Tensor,
     ) -> torch.Tensor:
-        return self.focal(logits, targets)
+        """
+        Compute loss with optional label smoothing.
+        
+        Args:
+            logits: (N, num_classes) raw predictions
+            targets: (N,) ground truth class indices
+            
+        Returns:
+            Scalar loss value
+        """
+        num_classes = logits.shape[1]
+        
+        if self.label_smoothing > 0:
+            # Apply label smoothing
+            # Convert to soft targets: (1 - eps) * one_hot + eps / num_classes
+            with torch.no_grad():
+                smooth_targets = torch.zeros_like(logits)
+                smooth_targets.fill_(self.label_smoothing / num_classes)
+                smooth_targets.scatter_(
+                    1, 
+                    targets.unsqueeze(1), 
+                    1 - self.label_smoothing + self.label_smoothing / num_classes
+                )
+            
+            # Compute focal loss on smoothed targets
+            p = F.softmax(logits, dim=1)
+            p_t = (p * smooth_targets).sum(dim=1)
+            focal_weight = (1 - p_t) ** self.gamma
+            
+            # Cross entropy with soft targets
+            log_p = F.log_softmax(logits, dim=1)
+            ce_loss = -(smooth_targets * log_p).sum(dim=1)
+            
+            # Apply class weights if provided
+            if self.weight is not None:
+                w = self.weight[targets]
+                ce_loss = ce_loss * w
+            
+            # Apply alpha and focal weight
+            focal_loss = self.alpha * focal_weight * ce_loss
+            
+            return focal_loss.mean()
+        else:
+            # Standard focal loss without smoothing
+            return self.focal(logits, targets)
 
 
 if __name__ == "__main__":

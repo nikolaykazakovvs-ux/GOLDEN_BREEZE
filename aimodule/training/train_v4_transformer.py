@@ -28,9 +28,10 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, WeightedRandomSampler
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
+from collections import Counter
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -71,7 +72,9 @@ class TrainerV4:
         score_weight: float = 1.0,
         class_weight: float = 0.5,
         focal_alpha: float = 0.25,
-        focal_gamma: float = 2.0,
+        focal_gamma: float = 3.0,  # Increased for class imbalance
+        label_smoothing: float = 0.1,  # Prevent overconfidence
+        class_weights: torch.Tensor = None,  # Optional class weights
         # Optimizer parameters
         lr: float = 1e-4,
         weight_decay: float = 1e-2,
@@ -110,10 +113,16 @@ class TrainerV4:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         
+        # Store class weights for later use
+        self.class_weights = class_weights
+        self.label_smoothing = label_smoothing
+        
         # Loss function (classification only for now)
         self.criterion = ClassificationOnlyLoss(
             alpha=focal_alpha,
             gamma=focal_gamma,
+            weight=class_weights,  # Pass class weights to loss
+            label_smoothing=label_smoothing,
         ).to(self.device)
         
         # Optimizer (will be initialized in train())
@@ -181,6 +190,12 @@ class TrainerV4:
             smc_dynamic = smc_dynamic[valid_mask]
             labels = labels[valid_mask]
             
+            # Get strategy signals if available
+            strategy_signals = None
+            if 'strategy_signals' in batch:
+                strategy_signals = batch['strategy_signals'].to(self.device)
+                strategy_signals = strategy_signals[valid_mask]
+            
             # Forward pass
             self.optimizer.zero_grad()
             
@@ -189,6 +204,7 @@ class TrainerV4:
                 x_slow_ohlcv=x_slow,
                 smc_static=smc_static,
                 smc_dynamic=smc_dynamic,
+                strategy_signals=strategy_signals,
             )
             
             # Compute loss
@@ -257,12 +273,19 @@ class TrainerV4:
             smc_dynamic = smc_dynamic[valid_mask]
             labels = labels[valid_mask]
             
+            # Get strategy signals if available
+            strategy_signals = None
+            if 'strategy_signals' in batch:
+                strategy_signals = batch['strategy_signals'].to(self.device)
+                strategy_signals = strategy_signals[valid_mask]
+            
             # Forward pass
             output = self.model(
                 x_fast_ohlcv=x_fast,
                 x_slow_ohlcv=x_slow,
                 smc_static=smc_static,
                 smc_dynamic=smc_dynamic,
+                strategy_signals=strategy_signals,
             )
             
             # Compute loss
@@ -280,12 +303,18 @@ class TrainerV4:
         avg_loss = total_loss / max(len(all_labels), 1)
         accuracy = (all_preds == all_labels).mean() if len(all_labels) > 0 else 0.0
         mcc = self._compute_mcc(all_labels, all_preds)
+        per_class_acc = self._compute_per_class_accuracy(all_labels, all_preds)
+        
+        # Compute prediction distribution
+        pred_counts = Counter(all_preds.tolist())
         
         return {
             "loss": avg_loss,
             "accuracy": accuracy,
             "mcc": mcc,
             "samples": len(all_labels),
+            "per_class_acc": per_class_acc,
+            "pred_distribution": dict(pred_counts),
         }
     
     def _compute_mcc(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -311,12 +340,28 @@ class TrainerV4:
                 # Multi-class: use accuracy as fallback
                 return (y_true == y_pred).mean() * 2 - 1
     
+    def _compute_per_class_accuracy(
+        self, 
+        y_true: np.ndarray, 
+        y_pred: np.ndarray,
+        num_classes: int = 3,
+    ) -> Dict[int, float]:
+        """Compute accuracy for each class."""
+        per_class = {}
+        for c in range(num_classes):
+            mask = y_true == c
+            if mask.sum() > 0:
+                per_class[c] = (y_pred[mask] == c).mean()
+            else:
+                per_class[c] = 0.0
+        return per_class
+    
     def train(
         self,
         train_loader: DataLoader,
         val_loader: DataLoader,
         epochs: int = 50,
-        early_stopping_patience: int = 10,
+        early_stopping_patience: int = 15,  # Increased for balanced sampling
         save_best: bool = True,
         verbose: bool = True,
     ) -> Dict[str, List[float]]:
@@ -393,12 +438,23 @@ class TrainerV4:
             if verbose:
                 epoch_time = time.time() - epoch_start
                 status = "★" if improved else " "
+                
+                # Per-class accuracy string
+                per_class = val_metrics.get('per_class_acc', {})
+                acc_str = " | ".join([f"C{c}:{a:.2f}" for c, a in per_class.items()])
+                
+                # Prediction distribution
+                pred_dist = val_metrics.get('pred_distribution', {})
+                dist_str = "/".join([f"{pred_dist.get(c, 0)}" for c in range(3)])
+                
                 print(
                     f"Epoch {self.epoch:3d}/{epochs} {status} | "
                     f"Train Loss: {train_metrics['loss']:.4f} | "
                     f"Val Loss: {val_metrics['loss']:.4f} | "
                     f"Val Acc: {val_metrics['accuracy']:.4f} | "
                     f"Val MCC: {val_metrics['mcc']:.4f} | "
+                    f"[{acc_str}] | "
+                    f"Pred: {dist_str} | "
                     f"LR: {current_lr:.2e} | "
                     f"Time: {epoch_time:.1f}s"
                 )
@@ -544,7 +600,18 @@ def main():
     print(f"Val samples: {len(val_loader.dataset)}")
     print(f"Test samples: {len(test_loader.dataset)}")
     
-    # Create trainer
+    # Compute class weights from label distribution
+    # Label distribution: 0=20.5%, 1=41.8%, 2=37.6%
+    # Weights inversely proportional to frequency
+    class_weights = torch.tensor([
+        1.0 / 0.205,  # Class 0 (LONG): 4.88
+        1.0 / 0.418,  # Class 1 (HOLD): 2.39
+        1.0 / 0.376,  # Class 2 (SHORT): 2.66
+    ], dtype=torch.float32)
+    class_weights = class_weights / class_weights.sum() * 3  # Normalize to sum=3
+    print(f"\n📊 Class weights: {class_weights.tolist()}")
+    
+    # Create trainer with class weights
     trainer = TrainerV4(
         model=model,
         config=config,
@@ -552,6 +619,9 @@ def main():
         lr=args.lr,
         max_lr=args.max_lr,
         weight_decay=args.weight_decay,
+        focal_gamma=3.0,  # Increased for class imbalance
+        label_smoothing=0.1,  # Prevent overconfidence
+        class_weights=class_weights,  # Pass class weights
     )
     
     # Train
@@ -559,7 +629,7 @@ def main():
         train_loader=train_loader,
         val_loader=val_loader,
         epochs=args.epochs,
-        early_stopping_patience=10,
+        early_stopping_patience=15,  # Increased for balanced sampling
         save_best=True,
     )
     
