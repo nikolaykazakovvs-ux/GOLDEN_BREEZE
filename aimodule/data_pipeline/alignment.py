@@ -4,12 +4,13 @@ Golden Breeze v4 - Time Alignment Module
 Aligns M5 (fast) stream with H1 (slow) stream using "Last Fully Closed" pattern.
 CRITICAL: Prevents lookahead bias by only using closed candles.
 
-Pattern: "Last Fully Closed H1 Bar"
-- For M5 bar at 14:35, use H1 bar closed at 14:00 (not the developing 14:xx bar)
-- pd.merge_asof with direction='backward' + proper lag
+**GPT Specs Integration (Pattern v1 - Strict):**
+- Rule: For M5 bar at t_open, match H1 bar where h1_close_time <= t_open
+- Implementation: pd.merge_asof(direction='backward')
+- Output: DataFrame with [m5_time, h1_time, smc_context_id] as lookup table
 
 Author: Golden Breeze Team
-Version: 4.0.0
+Version: 4.0.1
 Date: 2025-12-04
 """
 
@@ -34,17 +35,21 @@ class TimeAligner:
     """
     Time alignment utility for M5 and H1 streams.
     
-    Ensures no lookahead bias by using only "last fully closed" H1 bar
-    for each M5 timestamp.
+    **GPT Specs (Pattern v1 - Strict):**
+    - Rule: For M5 bar at t_open, match H1 bar where h1_close_time <= t_open
+    - Implementation: pd.merge_asof(direction='backward')
+    - Output: aligned_meta DataFrame with [m5_time, h1_time, smc_context_id]
     
     Key Methods:
+    - align_datasets(df_m5, df_h1): Main entry point per GPT specs
     - align_timestamps: Map M5 times to last closed H1 times
     - align_streams: Full alignment with feature extraction
     - create_training_samples: Generate aligned samples for training
     
     Example:
         >>> aligner = TimeAligner()
-        >>> aligned_df = aligner.align_streams(df_m5, df_h1_features)
+        >>> aligned_meta = aligner.align_datasets(df_m5, df_h1)
+        >>> # aligned_meta contains [m5_time, h1_time, smc_context_id]
     """
     
     def __init__(
@@ -63,19 +68,83 @@ class TimeAligner:
         self.apply_safety_lag = apply_safety_lag
         self.safety_lag_minutes = safety_lag_minutes
     
+    def align_datasets(
+        self,
+        df_m5: pd.DataFrame,
+        df_h1: pd.DataFrame,
+        m5_time_col: str = 'time',
+        h1_time_col: str = 'time',
+    ) -> pd.DataFrame:
+        """
+        **GPT Specs Entry Point:**
+        Align M5 with H1 using merge_asof(direction='backward').
+        
+        Rule: For M5 bar at t_open, match H1 bar where h1_close_time <= t_open
+        
+        Args:
+            df_m5: M5 OHLCV DataFrame
+            df_h1: H1 OHLCV DataFrame
+            m5_time_col: Time column name in M5 data
+            h1_time_col: Time column name in H1 data
+            
+        Returns:
+            aligned_meta: DataFrame with [m5_time, h1_time, m5_idx, h1_idx]
+        """
+        # Prepare M5 data
+        m5 = df_m5.copy()
+        if m5_time_col in m5.columns:
+            m5[m5_time_col] = pd.to_datetime(m5[m5_time_col])
+        elif isinstance(m5.index, pd.DatetimeIndex):
+            m5 = m5.reset_index()
+            m5_time_col = m5.columns[0]
+        m5 = m5.sort_values(m5_time_col).reset_index(drop=True)
+        m5['m5_idx'] = m5.index
+        
+        # Prepare H1 data
+        h1 = df_h1.copy()
+        if h1_time_col in h1.columns:
+            h1[h1_time_col] = pd.to_datetime(h1[h1_time_col])
+        elif isinstance(h1.index, pd.DatetimeIndex):
+            h1 = h1.reset_index()
+            h1_time_col = h1.columns[0]
+        h1 = h1.sort_values(h1_time_col).reset_index(drop=True)
+        h1['h1_idx'] = h1.index
+        
+        # Calculate target H1 time for each M5 (last closed H1)
+        m5['_target_h1'] = m5[m5_time_col].apply(self.get_last_closed_h1)
+        
+        # Use merge_asof to find matching H1 bar
+        # direction='backward' finds H1 time <= target_h1
+        aligned = pd.merge_asof(
+            m5[[m5_time_col, 'm5_idx', '_target_h1']].sort_values('_target_h1'),
+            h1[[h1_time_col, 'h1_idx']].rename(columns={h1_time_col: 'h1_time'}),
+            left_on='_target_h1',
+            right_on='h1_time',
+            direction='backward',
+        )
+        
+        # Rename and select final columns
+        aligned = aligned.rename(columns={m5_time_col: 'm5_time'})
+        aligned = aligned[['m5_time', 'h1_time', 'm5_idx', 'h1_idx']].dropna()
+        aligned = aligned.sort_values('m5_time').reset_index(drop=True)
+        
+        # Add smc_context_id (same as h1_idx for now)
+        aligned['smc_context_id'] = aligned['h1_idx'].astype(int)
+        
+        return aligned
+    
     def get_last_closed_h1(self, m5_time: pd.Timestamp) -> pd.Timestamp:
         """
         Get the timestamp of the last fully closed H1 bar for a given M5 time.
         
-        For M5 at 14:35 → H1 closed at 14:00 is the "current developing" bar
-        → We need to use 13:00 bar (last FULLY closed)
+        **GPT Specs Rule:** For M5 bar at t_open, match H1 where h1_close_time <= t_open
         
-        BUT if M5 is exactly at 15:00, then 14:00 bar is closed.
+        For M5 at 14:35 → H1 14:00 is developing → use 13:00 (last FULLY closed)
+        For M5 at 15:00 → H1 14:00 just closed → use 14:00
         
         Logic:
         - floor to hour: 14:35 → 14:00
-        - subtract 1 hour: 14:00 → 13:00 (if not exactly on hour)
-        - if exactly on hour (minute=0), the previous hour is last closed
+        - subtract 1 hour: 14:00 → 13:00 (H1 closes at :00, so 13:00 bar closed at 14:00)
         """
         # Floor to current hour
         hour_start = m5_time.floor('h')

@@ -4,8 +4,16 @@ Golden Breeze v4 - Fusion Dataset for Transformer Training
 PyTorch Dataset that provides aligned M5+H1+SMC samples
 for the GoldenBreezeFusionV4 model.
 
+**GPT Specs Integration:**
+- Uses aligned_meta from TimeAligner.align_datasets()
+- In __getitem__:
+  * Slice x_fast using M5 index
+  * Slice x_slow using mapped H1 index
+  * Fetch SMC features using H1 index (smc_context_id)
+  * Return dict of tensors as specified in architecture
+
 Author: Golden Breeze Team
-Version: 4.0.0
+Version: 4.0.1
 Date: 2025-12-04
 """
 
@@ -387,6 +395,242 @@ def create_dataloaders(
     )
     
     return train_loader, val_loader, test_loader
+
+
+class FusionDatasetV2(Dataset):
+    """
+    **GPT Specs Compliant Dataset**
+    
+    PyTorch Dataset that uses aligned_meta from TimeAligner.align_datasets().
+    
+    In __getitem__:
+    - Slice x_fast using M5 index from aligned_meta
+    - Slice x_slow using mapped H1 index from aligned_meta
+    - Fetch SMC features using smc_context_id (H1 index)
+    - Return dict of tensors as specified in architecture
+    
+    Example:
+        >>> aligner = TimeAligner()
+        >>> aligned_meta = aligner.align_datasets(df_m5, df_h1)
+        >>> smc_features = SMCProcessor().process_h1_data(df_h1)
+        >>> dataset = FusionDatasetV2(
+        ...     aligned_meta=aligned_meta,
+        ...     m5_data=m5_array,  # (N_m5, features)
+        ...     h1_data=h1_array,  # (N_h1, features)
+        ...     smc_features=smc_features,  # DataFrame indexed by H1 time
+        ...     labels=labels_array,  # (N_m5,)
+        ...     config=V4Config(),
+        ... )
+    """
+    
+    def __init__(
+        self,
+        aligned_meta: pd.DataFrame,
+        m5_data: np.ndarray,
+        h1_data: np.ndarray,
+        smc_features: pd.DataFrame,
+        labels: Optional[np.ndarray] = None,
+        config: Optional[V4Config] = None,
+        m5_feature_cols: List[str] = None,
+        h1_feature_cols: List[str] = None,
+    ):
+        """
+        Args:
+            aligned_meta: DataFrame from TimeAligner.align_datasets()
+                          Columns: [m5_time, h1_time, m5_idx, h1_idx, smc_context_id]
+            m5_data: M5 OHLCV array (N_m5, features)
+            h1_data: H1 OHLCV array (N_h1, features)
+            smc_features: SMC features DataFrame from SMCProcessor.process_h1_data()
+            labels: Optional labels array aligned with M5 data
+            config: V4Config for dimensions
+            m5_feature_cols: Feature column names for M5
+            h1_feature_cols: Feature column names for H1
+        """
+        self.aligned_meta = aligned_meta.reset_index(drop=True)
+        self.m5_data = m5_data
+        self.h1_data = h1_data
+        self.smc_features = smc_features
+        self.labels = labels
+        self.config = config or V4Config()
+        
+        # SMC processor for feature extraction
+        self.smc_processor = SMCProcessor(
+            decay_lambda=self.config.smc_decay_lambda,
+            max_ob_age=self.config.smc_max_ob_age,
+            max_active_obs=self.config.max_dynamic_tokens,
+        )
+        
+        # Filter aligned_meta to valid samples (enough history)
+        self._filter_valid_samples()
+    
+    def _filter_valid_samples(self):
+        """Filter samples that have enough M5 and H1 history."""
+        valid_mask = (
+            (self.aligned_meta['m5_idx'] >= self.config.seq_len_fast) &
+            (self.aligned_meta['h1_idx'] >= self.config.seq_len_slow)
+        )
+        self.aligned_meta = self.aligned_meta[valid_mask].reset_index(drop=True)
+    
+    def __len__(self) -> int:
+        return len(self.aligned_meta)
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        row = self.aligned_meta.iloc[idx]
+        m5_idx = int(row['m5_idx'])
+        h1_idx = int(row['h1_idx'])
+        smc_context_id = int(row['smc_context_id'])
+        
+        # Slice x_fast: M5 window ending at m5_idx
+        m5_start = m5_idx - self.config.seq_len_fast
+        x_fast = self.m5_data[m5_start:m5_idx].astype(np.float32)
+        
+        # Slice x_slow: H1 window ending at h1_idx
+        h1_start = max(0, h1_idx - self.config.seq_len_slow)
+        x_slow = self.h1_data[h1_start:h1_idx].astype(np.float32)
+        
+        # Fetch SMC features using smc_context_id (H1 index)
+        if smc_context_id < len(self.smc_features):
+            smc_row = self.smc_features.iloc[smc_context_id]
+            smc_static = self.smc_processor.get_static_vector(smc_row, dim=self.config.static_smc_dim)
+            
+            dynamic_obs = smc_row.get('dynamic_obs', []) if hasattr(smc_row, 'get') else (
+                smc_row['dynamic_obs'] if 'dynamic_obs' in smc_row.index else []
+            )
+            smc_dynamic = self.smc_processor.get_dynamic_matrix(
+                dynamic_obs if dynamic_obs else [],
+                max_tokens=self.config.max_dynamic_tokens,
+                dim_per_token=self.config.dynamic_smc_dim,
+            )
+        else:
+            smc_static = np.zeros(self.config.static_smc_dim, dtype=np.float32)
+            smc_dynamic = np.zeros(
+                (self.config.max_dynamic_tokens, self.config.dynamic_smc_dim), 
+                dtype=np.float32
+            )
+        
+        # Convert to tensors
+        x_fast = torch.tensor(x_fast, dtype=torch.float32)
+        x_slow = torch.tensor(x_slow, dtype=torch.float32)
+        smc_static = torch.tensor(smc_static, dtype=torch.float32)
+        smc_dynamic = torch.tensor(smc_dynamic, dtype=torch.float32)
+        
+        # Pad sequences if needed
+        x_fast = self._pad_sequence(x_fast, self.config.seq_len_fast, x_fast.shape[-1])
+        x_slow = self._pad_sequence(x_slow, self.config.seq_len_slow, x_slow.shape[-1])
+        
+        result = {
+            'x_fast': x_fast,
+            'x_slow': x_slow,
+            'smc_static': smc_static,
+            'smc_dynamic': smc_dynamic,
+        }
+        
+        # Add label if available
+        if self.labels is not None and m5_idx < len(self.labels):
+            result['label'] = torch.tensor(self.labels[m5_idx], dtype=torch.long)
+        
+        return result
+    
+    def _pad_sequence(
+        self, 
+        seq: torch.Tensor, 
+        target_len: int, 
+        target_features: int
+    ) -> torch.Tensor:
+        """Pad or truncate sequence to target length."""
+        if len(seq.shape) == 1:
+            seq = seq.unsqueeze(-1)
+        
+        current_len, current_features = seq.shape
+        
+        # Handle length
+        if current_len < target_len:
+            padding = torch.zeros(target_len - current_len, current_features)
+            seq = torch.cat([padding, seq], dim=0)  # Pad at beginning
+        elif current_len > target_len:
+            seq = seq[-target_len:]  # Take last target_len
+        
+        return seq
+    
+    @classmethod
+    def from_dataframes(
+        cls,
+        df_m5: pd.DataFrame,
+        df_h1: pd.DataFrame,
+        df_labels: Optional[pd.DataFrame] = None,
+        config: Optional[V4Config] = None,
+        m5_features: List[str] = None,
+        h1_features: List[str] = None,
+        label_col: str = 'label',
+        time_col: str = 'time',
+    ) -> 'FusionDatasetV2':
+        """
+        **GPT Specs Factory Method**
+        
+        Create dataset from DataFrames using align_datasets() and process_h1_data().
+        
+        Args:
+            df_m5: M5 OHLCV DataFrame
+            df_h1: H1 OHLCV DataFrame
+            df_labels: Optional labels DataFrame
+            config: V4Config
+            m5_features: Feature columns for M5
+            h1_features: Feature columns for H1
+            label_col: Label column name
+            time_col: Time column name
+        """
+        config = config or V4Config()
+        
+        # Default features
+        if m5_features is None:
+            m5_features = ['open', 'high', 'low', 'close', 'volume']
+        if h1_features is None:
+            h1_features = ['open', 'high', 'low', 'close', 'volume']
+        
+        print("Step 1: Aligning datasets...")
+        aligner = TimeAligner()
+        aligned_meta = aligner.align_datasets(df_m5, df_h1, time_col, time_col)
+        print(f"  Aligned {len(aligned_meta)} samples")
+        
+        print("Step 2: Processing SMC features...")
+        smc_processor = SMCProcessor(
+            decay_lambda=config.smc_decay_lambda,
+            max_ob_age=config.smc_max_ob_age,
+            max_active_obs=config.max_dynamic_tokens,
+        )
+        smc_features = smc_processor.process_h1_data(df_h1)
+        print(f"  SMC features for {len(smc_features)} H1 bars")
+        
+        # Prepare M5 data array
+        df_m5_sorted = df_m5.sort_values(time_col).reset_index(drop=True)
+        m5_data = df_m5_sorted[m5_features].values.astype(np.float32)
+        
+        # Prepare H1 data array
+        df_h1_sorted = df_h1.sort_values(time_col).reset_index(drop=True)
+        h1_data = df_h1_sorted[h1_features].values.astype(np.float32)
+        
+        # Prepare labels if available
+        labels = None
+        if df_labels is not None:
+            df_labels[time_col] = pd.to_datetime(df_labels[time_col])
+            df_m5_sorted[time_col] = pd.to_datetime(df_m5_sorted[time_col])
+            
+            # Merge labels with M5 data
+            merged = df_m5_sorted[[time_col]].merge(
+                df_labels[[time_col, label_col]], 
+                on=time_col, 
+                how='left'
+            )
+            labels = merged[label_col].fillna(-1).values.astype(np.int64)
+        
+        return cls(
+            aligned_meta=aligned_meta,
+            m5_data=m5_data,
+            h1_data=h1_data,
+            smc_features=smc_features,
+            labels=labels,
+            config=config,
+        )
 
 
 if __name__ == "__main__":

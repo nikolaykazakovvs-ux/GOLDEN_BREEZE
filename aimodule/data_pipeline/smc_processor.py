@@ -4,21 +4,20 @@ Golden Breeze v4 - SMC (Smart Money Concepts) Processor
 Calculates Order Block features with explicit time decay.
 NO reliance on implicit positional encoding for "age".
 
-Features per Order Block:
-- rel_high: Relative position to OB high (normalized by ATR)
-- rel_low: Relative position to OB low (normalized by ATR)
-- is_bullish: Binary (1 for bullish OB, 0 for bearish)
-- time_decay: exp(-lambda * bars_since_creation)
-- state: One-hot encoded (FRESH, MITIGATED, BROKEN)
+**GPT Specs Integration:**
+Features per Order Block: [dist_high, dist_low, is_bullish, state_id, age_norm]
+Decay: decay_weight = exp(-0.05 * age_bars)
+State ID: 'fresh'=0, 'mitigated'=1, 'broken'=2
+Output: DataFrame indexed by H1 time with calculated features for *active* OBs/FVGs.
 
 Author: Golden Breeze Team
-Version: 4.0.0
+Version: 4.0.1
 Date: 2025-12-04
 """
 
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 from enum import IntEnum
 
@@ -27,9 +26,12 @@ from enum import IntEnum
 SMC_DECAY_LAMBDA = 0.05
 SMC_MAX_OB_AGE = 200  # bars
 
+# State ID mapping (GPT Specs)
+STATE_MAP = {'fresh': 0, 'mitigated': 1, 'broken': 2}
+
 
 class OBState(IntEnum):
-    """Order Block state."""
+    """Order Block state (integer IDs per GPT spec)."""
     FRESH = 0       # Never tested
     MITIGATED = 1   # Partially tested (price touched but didn't break)
     BROKEN = 2      # Fully broken (price closed through)
@@ -61,12 +63,27 @@ class OrderBlock:
     def midpoint(self) -> float:
         return (self.ob_high + self.ob_low) / 2
     
+    @property
+    def state_id(self) -> int:
+        """Return integer state ID (GPT Specs)."""
+        return int(self.state)
+    
+    @property
+    def state_name(self) -> str:
+        """Return string state name."""
+        return ['fresh', 'mitigated', 'broken'][self.state]
+    
     def get_age_bars(self, current_idx: int) -> int:
         """Calculate age in bars."""
         return max(0, current_idx - self.creation_idx)
     
-    def get_time_decay(self, current_idx: int, decay_lambda: float = SMC_DECAY_LAMBDA) -> float:
-        """Calculate exponential time decay."""
+    def get_age_norm(self, current_idx: int, max_age: int = SMC_MAX_OB_AGE) -> float:
+        """Calculate normalized age [0, 1] (GPT Specs)."""
+        age = self.get_age_bars(current_idx)
+        return min(age / max_age, 1.0)
+    
+    def get_decay_weight(self, current_idx: int, decay_lambda: float = SMC_DECAY_LAMBDA) -> float:
+        """Calculate decay_weight = exp(-0.05 * age_bars) (GPT Specs)."""
         age = self.get_age_bars(current_idx)
         return np.exp(-decay_lambda * age)
     
@@ -95,16 +112,21 @@ class SMCProcessor:
     """
     Smart Money Concepts Processor for Order Block detection and feature extraction.
     
-    Key Features:
-    - Identifies Order Blocks from H1 data
-    - Tracks OB state (FRESH, MITIGATED, BROKEN)
-    - Calculates explicit time decay: exp(-lambda * bars_since_creation)
-    - Computes relative position features normalized by ATR
+    **GPT Specs Integration:**
+    - Features: [dist_high, dist_low, is_bullish, state_id, age_norm]
+    - Decay: decay_weight = exp(-0.05 * age_bars)
+    - State ID: 'fresh'=0, 'mitigated'=1, 'broken'=2
+    - Output: DataFrame indexed by H1 time with active OB/FVG features
+    
+    Key Methods:
+    - process_h1_data(df_h1): Main entry point, returns SMC features DataFrame
+    - detect_order_blocks(df): Identify Order Blocks from OHLCV
+    - calculate_ob_features(df_h1): Calculate per-bar OB features
     
     Example:
         >>> processor = SMCProcessor(decay_lambda=0.05, max_ob_age=200)
         >>> df_h1 = pd.read_csv("data/raw/XAUUSD/H1.csv")
-        >>> smc_features = processor.calculate_ob_features(df_h1)
+        >>> smc_features = processor.process_h1_data(df_h1)
     """
     
     def __init__(
@@ -131,6 +153,24 @@ class SMCProcessor:
         
         # Active Order Blocks
         self.active_obs: List[OrderBlock] = []
+    
+    def process_h1_data(self, df_h1: pd.DataFrame) -> pd.DataFrame:
+        """
+        Main entry point: Process H1 data and return SMC features DataFrame.
+        
+        **GPT Specs:**
+        Output DataFrame contains per-bar features for all *active* OBs:
+        - ob_features: [dist_high, dist_low, is_bullish, state_id, age_norm, decay_weight]
+        - fvg_features: Similar for Fair Value Gaps (if any)
+        - Aggregated static features for nearest/strongest OB
+        
+        Args:
+            df_h1: H1 OHLCV DataFrame with columns [time, open, high, low, close, volume]
+            
+        Returns:
+            DataFrame indexed by H1 time with SMC features
+        """
+        return self.calculate_ob_features(df_h1, return_dynamic=True)
     
     def calculate_atr(self, df: pd.DataFrame) -> pd.Series:
         """Calculate ATR (Average True Range)."""
@@ -225,12 +265,13 @@ class SMCProcessor:
         """
         Calculate Order Block features for every H1 bar.
         
-        For each timestamp, computes features for all *active* OBs:
-        - age_bars: Current bar - OB creation bar
-        - time_decay: exp(-lambda * age_bars)
-        - rel_pos_high: (Close - OB_High) / ATR
-        - rel_pos_low: (Close - OB_Low) / ATR
-        - state: One-hot encoded [FRESH, MITIGATED, BROKEN]
+        **GPT Specs Features per active OB:**
+        - dist_high: (Close - OB_High) / ATR
+        - dist_low: (Close - OB_Low) / ATR
+        - is_bullish: 1 for bullish, 0 for bearish
+        - state_id: 0=fresh, 1=mitigated, 2=broken
+        - age_norm: age_bars / max_ob_age (normalized to [0,1])
+        - decay_weight: exp(-0.05 * age_bars)
         
         Args:
             df_h1: H1 OHLCV DataFrame
@@ -261,9 +302,12 @@ class SMCProcessor:
         static_features = {
             'smc_bullish_ob_count': np.zeros(n_bars),
             'smc_bearish_ob_count': np.zeros(n_bars),
-            'smc_nearest_ob_rel_dist': np.full(n_bars, np.nan),
-            'smc_nearest_ob_decay': np.zeros(n_bars),
+            'smc_nearest_ob_dist_high': np.full(n_bars, np.nan),
+            'smc_nearest_ob_dist_low': np.full(n_bars, np.nan),
+            'smc_nearest_ob_decay_weight': np.zeros(n_bars),
             'smc_nearest_ob_is_bullish': np.zeros(n_bars),
+            'smc_nearest_ob_state_id': np.zeros(n_bars),
+            'smc_nearest_ob_age_norm': np.zeros(n_bars),
             'smc_avg_ob_decay': np.zeros(n_bars),
             'smc_fresh_ob_count': np.zeros(n_bars),
             'smc_mitigated_ob_count': np.zeros(n_bars),
@@ -277,9 +321,9 @@ class SMCProcessor:
             'smc_session_ny': np.zeros(n_bars),
         }
         
-        # Dynamic OB features (per active OB)
+        # Dynamic OB features (per active OB) - GPT Specs format
         if return_dynamic:
-            dynamic_features = []  # List of dicts per bar
+            dynamic_features = []  # List of lists per bar
         
         # Track active OBs
         active_obs: List[OrderBlock] = []
@@ -312,7 +356,7 @@ class SMCProcessor:
             
             # Sort by strength * decay (most relevant first)
             active_obs.sort(
-                key=lambda ob: ob.strength * ob.get_time_decay(i, self.decay_lambda),
+                key=lambda ob: ob.strength * ob.get_decay_weight(i, self.decay_lambda),
                 reverse=True
             )
             
@@ -330,9 +374,9 @@ class SMCProcessor:
             static_features['smc_fresh_ob_count'][i] = fresh_count
             static_features['smc_mitigated_ob_count'][i] = mitigated_count
             
-            # Nearest OB features
+            # Nearest OB features (GPT Specs format)
             if active_obs:
-                # Find nearest OB
+                # Find nearest OB by distance
                 min_dist = float('inf')
                 nearest_ob = None
                 for ob in active_obs:
@@ -342,12 +386,16 @@ class SMCProcessor:
                         nearest_ob = ob
                 
                 if nearest_ob:
-                    static_features['smc_nearest_ob_rel_dist'][i] = min_dist / current_atr
-                    static_features['smc_nearest_ob_decay'][i] = nearest_ob.get_time_decay(i, self.decay_lambda)
+                    # GPT Specs: dist_high, dist_low, is_bullish, state_id, age_norm, decay_weight
+                    static_features['smc_nearest_ob_dist_high'][i] = (current_close - nearest_ob.ob_high) / current_atr
+                    static_features['smc_nearest_ob_dist_low'][i] = (current_close - nearest_ob.ob_low) / current_atr
                     static_features['smc_nearest_ob_is_bullish'][i] = float(nearest_ob.is_bullish)
+                    static_features['smc_nearest_ob_state_id'][i] = nearest_ob.state_id
+                    static_features['smc_nearest_ob_age_norm'][i] = nearest_ob.get_age_norm(i, self.max_ob_age)
+                    static_features['smc_nearest_ob_decay_weight'][i] = nearest_ob.get_decay_weight(i, self.decay_lambda)
                 
                 # Average decay
-                avg_decay = np.mean([ob.get_time_decay(i, self.decay_lambda) for ob in active_obs])
+                avg_decay = np.mean([ob.get_decay_weight(i, self.decay_lambda) for ob in active_obs])
                 static_features['smc_avg_ob_decay'][i] = avg_decay
             
             # Session detection (UTC)
@@ -359,27 +407,24 @@ class SMCProcessor:
             else:
                 static_features['smc_session_ny'][i] = 1.0
             
-            # Dynamic features per OB
+            # Dynamic features per OB (GPT Specs format)
             if return_dynamic:
                 bar_dynamic = []
                 for ob in active_obs:
-                    rel_high = (current_close - ob.ob_high) / current_atr
-                    rel_low = (current_close - ob.ob_low) / current_atr
-                    decay = ob.get_time_decay(i, self.decay_lambda)
-                    
-                    # State one-hot
-                    state_fresh = 1.0 if ob.state == OBState.FRESH else 0.0
-                    state_mitigated = 1.0 if ob.state == OBState.MITIGATED else 0.0
-                    state_broken = 1.0 if ob.state == OBState.BROKEN else 0.0
+                    # GPT Specs: [dist_high, dist_low, is_bullish, state_id, age_norm, decay_weight]
+                    dist_high = (current_close - ob.ob_high) / current_atr
+                    dist_low = (current_close - ob.ob_low) / current_atr
+                    decay_weight = ob.get_decay_weight(i, self.decay_lambda)
+                    age_norm = ob.get_age_norm(i, self.max_ob_age)
                     
                     bar_dynamic.append({
-                        'rel_high': rel_high,
-                        'rel_low': rel_low,
+                        'dist_high': dist_high,
+                        'dist_low': dist_low,
                         'is_bullish': float(ob.is_bullish),
-                        'time_decay': decay,
-                        'state_fresh': state_fresh,
-                        'state_mitigated': state_mitigated,
-                        'state_broken': state_broken,
+                        'state_id': ob.state_id,
+                        'age_norm': age_norm,
+                        'decay_weight': decay_weight,
+                        # Additional useful features
                         'strength': ob.strength,
                         'age_bars': ob.get_age_bars(i),
                     })
@@ -389,8 +434,9 @@ class SMCProcessor:
         # Build result DataFrame
         result_df = pd.DataFrame(static_features, index=df.index)
         
-        # Fill NaN with 0 for distance if no OBs
-        result_df['smc_nearest_ob_rel_dist'] = result_df['smc_nearest_ob_rel_dist'].fillna(0)
+        # Fill NaN with 0 for distance features if no OBs
+        result_df['smc_nearest_ob_dist_high'] = result_df['smc_nearest_ob_dist_high'].fillna(0)
+        result_df['smc_nearest_ob_dist_low'] = result_df['smc_nearest_ob_dist_low'].fillna(0)
         result_df['smc_swing_high_dist'] = result_df['smc_swing_high_dist'].fillna(0)
         result_df['smc_swing_low_dist'] = result_df['smc_swing_low_dist'].fillna(0)
         
@@ -399,69 +445,85 @@ class SMCProcessor:
         
         return result_df
     
-    def get_static_vector(self, row: pd.Series) -> np.ndarray:
+    def get_static_vector(self, row: pd.Series, dim: int = 16) -> np.ndarray:
         """
         Extract static SMC vector from a feature row.
         
+        **GPT Specs format for nearest OB:**
+        [dist_high, dist_low, is_bullish, state_id, age_norm, decay_weight, ...]
+        
         Returns:
-            numpy array of shape (static_smc_dim,)
+            numpy array of shape (dim,)
         """
         static_cols = [
-            'smc_bullish_ob_count',
-            'smc_bearish_ob_count', 
-            'smc_nearest_ob_rel_dist',
-            'smc_nearest_ob_decay',
+            # GPT Specs features for nearest OB
+            'smc_nearest_ob_dist_high',
+            'smc_nearest_ob_dist_low',
             'smc_nearest_ob_is_bullish',
-            'smc_avg_ob_decay',
+            'smc_nearest_ob_state_id',
+            'smc_nearest_ob_age_norm',
+            'smc_nearest_ob_decay_weight',
+            # Aggregated counts
+            'smc_bullish_ob_count',
+            'smc_bearish_ob_count',
             'smc_fresh_ob_count',
             'smc_mitigated_ob_count',
+            'smc_avg_ob_decay',
+            # Market structure
             'smc_market_structure',
             'smc_swing_high_dist',
             'smc_swing_low_dist',
+            # Session
             'smc_session_asian',
             'smc_session_london',
-            'smc_session_ny',
         ]
         
-        values = [row.get(col, 0.0) for col in static_cols]
+        values = []
+        for col in static_cols:
+            val = row.get(col, 0.0) if hasattr(row, 'get') else row[col] if col in row.index else 0.0
+            values.append(float(val) if not pd.isna(val) else 0.0)
         
-        # Pad to 16 dims
-        while len(values) < 16:
+        # Pad to dim
+        while len(values) < dim:
             values.append(0.0)
         
-        return np.array(values[:16], dtype=np.float32)
+        return np.array(values[:dim], dtype=np.float32)
     
     def get_dynamic_matrix(
         self, 
         dynamic_obs: List[dict],
         max_tokens: int = 10,
-        dim_per_token: int = 12,
+        dim_per_token: int = 8,
     ) -> np.ndarray:
         """
         Extract dynamic OB matrix from dynamic_obs list.
         
+        **GPT Specs format per OB:**
+        [dist_high, dist_low, is_bullish, state_id, age_norm, decay_weight, strength, age_bars_norm]
+        
         Args:
             dynamic_obs: List of OB dicts from calculate_ob_features
             max_tokens: Maximum number of tokens
-            dim_per_token: Features per token
+            dim_per_token: Features per token (default 8 per GPT Specs)
             
         Returns:
             numpy array of shape (max_tokens, dim_per_token)
         """
         result = np.zeros((max_tokens, dim_per_token), dtype=np.float32)
         
+        if dynamic_obs is None:
+            return result
+        
         for i, ob in enumerate(dynamic_obs[:max_tokens]):
-            result[i, 0] = ob.get('rel_high', 0)
-            result[i, 1] = ob.get('rel_low', 0)
+            # GPT Specs: [dist_high, dist_low, is_bullish, state_id, age_norm, decay_weight]
+            result[i, 0] = ob.get('dist_high', 0)
+            result[i, 1] = ob.get('dist_low', 0)
             result[i, 2] = ob.get('is_bullish', 0)
-            result[i, 3] = ob.get('time_decay', 0)
-            result[i, 4] = ob.get('state_fresh', 0)
-            result[i, 5] = ob.get('state_mitigated', 0)
-            result[i, 6] = ob.get('state_broken', 0)
-            result[i, 7] = ob.get('strength', 0)
-            result[i, 8] = min(ob.get('age_bars', 0) / 100.0, 2.0)  # Normalized age
-            # Pad remaining dims
-            # result[i, 9:12] = 0  # Already zeros
+            result[i, 3] = ob.get('state_id', 0) / 2.0  # Normalize state_id to [0, 1]
+            result[i, 4] = ob.get('age_norm', 0)
+            result[i, 5] = ob.get('decay_weight', 0)
+            result[i, 6] = ob.get('strength', 0)
+            result[i, 7] = min(ob.get('age_bars', 0) / 100.0, 2.0)  # Normalized age
         
         return result
 
