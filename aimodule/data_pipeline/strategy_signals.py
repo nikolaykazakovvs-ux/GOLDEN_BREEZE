@@ -567,6 +567,481 @@ class StrategySignalsGenerator:
         }, index=df.index)
     
     # =========================================================================
+    # 10. SUPERTREND
+    # =========================================================================
+    
+    def supertrend_signal(self, df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> pd.DataFrame:
+        """
+        SuperTrend Indicator.
+        
+        Trend-following indicator combining ATR with price.
+        BUY: Price above SuperTrend line
+        SELL: Price below SuperTrend line
+        """
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        # ATR
+        tr = pd.concat([
+            high - low,
+            np.abs(high - close.shift(1)),
+            np.abs(low - close.shift(1))
+        ], axis=1).max(axis=1)
+        atr = tr.rolling(period).mean()
+        
+        # Basic bands
+        hl2 = (high + low) / 2
+        upper_band = hl2 + (multiplier * atr)
+        lower_band = hl2 - (multiplier * atr)
+        
+        # SuperTrend calculation
+        supertrend = pd.Series(0.0, index=df.index)
+        direction = pd.Series(1, index=df.index)  # 1 = up, -1 = down
+        
+        for i in range(1, len(df)):
+            if close.iloc[i] > upper_band.iloc[i-1]:
+                direction.iloc[i] = 1
+            elif close.iloc[i] < lower_band.iloc[i-1]:
+                direction.iloc[i] = -1
+            else:
+                direction.iloc[i] = direction.iloc[i-1]
+                
+            if direction.iloc[i] == 1:
+                supertrend.iloc[i] = lower_band.iloc[i]
+            else:
+                supertrend.iloc[i] = upper_band.iloc[i]
+        
+        # Signal
+        signal = direction.copy()
+        
+        # Strength = distance from supertrend (normalized)
+        dist = np.abs(close - supertrend) / (atr + 1e-10)
+        strength = (dist / 2).clip(0, 1)
+        
+        return pd.DataFrame({
+            'supertrend_signal': signal,
+            'supertrend_strength': strength,
+            'supertrend_dist': (close - supertrend) / close,
+        }, index=df.index)
+    
+    # =========================================================================
+    # 11. ICHIMOKU CLOUD
+    # =========================================================================
+    
+    def ichimoku_signal(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Ichimoku Cloud Indicator.
+        
+        BUY: Price above cloud, Tenkan > Kijun
+        SELL: Price below cloud, Tenkan < Kijun
+        """
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        # Tenkan-sen (9 periods)
+        tenkan = (high.rolling(9).max() + low.rolling(9).min()) / 2
+        
+        # Kijun-sen (26 periods)
+        kijun = (high.rolling(26).max() + low.rolling(26).min()) / 2
+        
+        # Senkou Span A (shifted 26 periods)
+        senkou_a = ((tenkan + kijun) / 2).shift(26)
+        
+        # Senkou Span B (52 periods, shifted 26)
+        senkou_b = ((high.rolling(52).max() + low.rolling(52).min()) / 2).shift(26)
+        
+        # Cloud top and bottom
+        cloud_top = pd.concat([senkou_a, senkou_b], axis=1).max(axis=1)
+        cloud_bottom = pd.concat([senkou_a, senkou_b], axis=1).min(axis=1)
+        
+        # Signal
+        signal = pd.Series(0, index=df.index)
+        
+        # Above cloud = bullish
+        above_cloud = close > cloud_top
+        below_cloud = close < cloud_bottom
+        
+        # Tenkan/Kijun cross
+        tk_bullish = tenkan > kijun
+        
+        signal[above_cloud & tk_bullish] = 1
+        signal[below_cloud & ~tk_bullish] = -1
+        
+        # Strength
+        cloud_thickness = np.abs(senkou_a - senkou_b) / close
+        price_cloud_dist = np.where(
+            close > cloud_top,
+            (close - cloud_top) / close,
+            np.where(close < cloud_bottom, (cloud_bottom - close) / close, 0)
+        )
+        
+        strength = (np.abs(price_cloud_dist) * 10).clip(0, 1)
+        
+        return pd.DataFrame({
+            'ichimoku_signal': signal,
+            'ichimoku_strength': strength,
+            'ichimoku_tk_diff': (tenkan - kijun) / close,
+            'ichimoku_cloud_pos': np.where(close > cloud_top, 1, np.where(close < cloud_bottom, -1, 0)),
+        }, index=df.index)
+    
+    # =========================================================================
+    # 12. VWAP (Volume Weighted Average Price)
+    # =========================================================================
+    
+    def vwap_signal(self, df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+        """
+        Rolling VWAP indicator.
+        
+        BUY: Price above VWAP (discount)
+        SELL: Price below VWAP (premium)
+        """
+        close = df['close']
+        high = df['high']
+        low = df['low']
+        
+        # Get volume column
+        vol_col = 'tick_volume' if 'tick_volume' in df.columns else 'volume'
+        volume = df[vol_col] if vol_col in df.columns else pd.Series(1, index=df.index)
+        
+        # Typical price
+        typical = (high + low + close) / 3
+        
+        # Rolling VWAP
+        cum_vol = volume.rolling(period).sum()
+        cum_tp_vol = (typical * volume).rolling(period).sum()
+        vwap = cum_tp_vol / (cum_vol + 1e-10)
+        
+        # Signal
+        diff = close - vwap
+        diff_pct = diff / close
+        
+        signal = pd.Series(0, index=df.index)
+        signal[diff_pct > 0.001] = 1   # Above VWAP
+        signal[diff_pct < -0.001] = -1  # Below VWAP
+        
+        strength = (np.abs(diff_pct) * 50).clip(0, 1)
+        
+        return pd.DataFrame({
+            'vwap_signal': signal,
+            'vwap_strength': strength,
+            'vwap_dist': diff_pct,
+        }, index=df.index)
+    
+    # =========================================================================
+    # 13. KELTNER CHANNELS
+    # =========================================================================
+    
+    def keltner_signal(self, df: pd.DataFrame, period: int = 20, multiplier: float = 2.0) -> pd.DataFrame:
+        """
+        Keltner Channels.
+        
+        Similar to Bollinger but uses ATR instead of std.
+        """
+        close = df['close']
+        high = df['high']
+        low = df['low']
+        
+        # EMA middle
+        middle = close.ewm(span=period).mean()
+        
+        # ATR
+        tr = pd.concat([
+            high - low,
+            np.abs(high - close.shift(1)),
+            np.abs(low - close.shift(1))
+        ], axis=1).max(axis=1)
+        atr = tr.rolling(period).mean()
+        
+        upper = middle + multiplier * atr
+        lower = middle - multiplier * atr
+        
+        # Position within channel
+        channel_width = upper - lower
+        position = (close - lower) / (channel_width + 1e-10)
+        
+        signal = pd.Series(0, index=df.index)
+        signal[close > upper] = 1   # Breakout up
+        signal[close < lower] = -1  # Breakout down
+        
+        # Strength = distance from middle
+        strength = np.abs(position - 0.5) * 2
+        
+        return pd.DataFrame({
+            'keltner_signal': signal,
+            'keltner_strength': strength.clip(0, 1),
+            'keltner_position': position.clip(0, 1),
+        }, index=df.index)
+    
+    # =========================================================================
+    # 14. CCI (Commodity Channel Index)
+    # =========================================================================
+    
+    def cci_signal(self, df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+        """
+        CCI - Commodity Channel Index.
+        
+        BUY: CCI < -100 (oversold)
+        SELL: CCI > 100 (overbought)
+        """
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        typical = (high + low + close) / 3
+        sma = typical.rolling(period).mean()
+        mad = typical.rolling(period).apply(lambda x: np.abs(x - x.mean()).mean())
+        
+        cci = (typical - sma) / (0.015 * mad + 1e-10)
+        
+        signal = pd.Series(0, index=df.index)
+        signal[cci < -100] = 1   # Oversold
+        signal[cci > 100] = -1   # Overbought
+        
+        strength = (np.abs(cci) / 200).clip(0, 1)
+        
+        return pd.DataFrame({
+            'cci_signal': signal,
+            'cci_strength': strength,
+            'cci_value': (cci / 200).clip(-1, 1),
+        }, index=df.index)
+    
+    # =========================================================================
+    # 15. WILLIAMS %R
+    # =========================================================================
+    
+    def williams_r_signal(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+        """
+        Williams %R - Momentum indicator.
+        
+        BUY: %R < -80 (oversold)
+        SELL: %R > -20 (overbought)
+        """
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        highest = high.rolling(period).max()
+        lowest = low.rolling(period).min()
+        
+        williams_r = -100 * (highest - close) / (highest - lowest + 1e-10)
+        
+        signal = pd.Series(0, index=df.index)
+        signal[williams_r < -80] = 1   # Oversold
+        signal[williams_r > -20] = -1  # Overbought
+        
+        # Strength = distance from middle (-50)
+        strength = np.abs(williams_r + 50) / 50
+        
+        return pd.DataFrame({
+            'williams_signal': signal,
+            'williams_strength': strength.clip(0, 1),
+            'williams_value': (williams_r + 50) / 50,  # Normalize to -1 to 1
+        }, index=df.index)
+    
+    # =========================================================================
+    # 16. PARABOLIC SAR
+    # =========================================================================
+    
+    def parabolic_sar_signal(self, df: pd.DataFrame, af_start: float = 0.02, af_max: float = 0.2) -> pd.DataFrame:
+        """
+        Parabolic SAR - Trend following indicator.
+        
+        BUY: Price above SAR
+        SELL: Price below SAR
+        """
+        high = df['high'].values
+        low = df['low'].values
+        close = df['close'].values
+        n = len(df)
+        
+        psar = np.zeros(n)
+        trend = np.ones(n)  # 1 = up, -1 = down
+        af = np.full(n, af_start)
+        ep = np.zeros(n)
+        
+        # Initialize
+        psar[0] = low[0]
+        ep[0] = high[0]
+        
+        for i in range(1, n):
+            if trend[i-1] == 1:
+                psar[i] = psar[i-1] + af[i-1] * (ep[i-1] - psar[i-1])
+                psar[i] = min(psar[i], low[i-1], low[i-2] if i > 1 else low[i-1])
+                
+                if low[i] < psar[i]:
+                    trend[i] = -1
+                    psar[i] = ep[i-1]
+                    ep[i] = low[i]
+                    af[i] = af_start
+                else:
+                    trend[i] = 1
+                    if high[i] > ep[i-1]:
+                        ep[i] = high[i]
+                        af[i] = min(af[i-1] + af_start, af_max)
+                    else:
+                        ep[i] = ep[i-1]
+                        af[i] = af[i-1]
+            else:
+                psar[i] = psar[i-1] - af[i-1] * (psar[i-1] - ep[i-1])
+                psar[i] = max(psar[i], high[i-1], high[i-2] if i > 1 else high[i-1])
+                
+                if high[i] > psar[i]:
+                    trend[i] = 1
+                    psar[i] = ep[i-1]
+                    ep[i] = high[i]
+                    af[i] = af_start
+                else:
+                    trend[i] = -1
+                    if low[i] < ep[i-1]:
+                        ep[i] = low[i]
+                        af[i] = min(af[i-1] + af_start, af_max)
+                    else:
+                        ep[i] = ep[i-1]
+                        af[i] = af[i-1]
+        
+        signal = pd.Series(trend, index=df.index)
+        dist = np.abs(close - psar) / close
+        strength = (dist * 50).clip(0, 1)
+        
+        return pd.DataFrame({
+            'psar_signal': signal,
+            'psar_strength': strength,
+            'psar_dist': (close - psar) / close,
+        }, index=df.index)
+    
+    # =========================================================================
+    # 17. AWESOME OSCILLATOR
+    # =========================================================================
+    
+    def awesome_oscillator_signal(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Awesome Oscillator - Bill Williams indicator.
+        
+        AO = SMA5(median) - SMA34(median)
+        """
+        high = df['high']
+        low = df['low']
+        
+        median = (high + low) / 2
+        ao = median.rolling(5).mean() - median.rolling(34).mean()
+        
+        # Signal
+        signal = pd.Series(0, index=df.index)
+        signal[ao > 0] = 1
+        signal[ao < 0] = -1
+        
+        # Zero cross
+        cross_up = (ao > 0) & (ao.shift(1) <= 0)
+        cross_down = (ao < 0) & (ao.shift(1) >= 0)
+        
+        # Strength
+        ao_norm = ao / (df['close'] * 0.01)  # Normalize by 1% of price
+        strength = np.abs(ao_norm).clip(0, 1)
+        strength[cross_up | cross_down] = 1.0
+        
+        return pd.DataFrame({
+            'ao_signal': signal,
+            'ao_strength': strength,
+            'ao_value': ao_norm.clip(-1, 1),
+        }, index=df.index)
+    
+    # =========================================================================
+    # 18. MFI (Money Flow Index)
+    # =========================================================================
+    
+    def mfi_signal(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+        """
+        Money Flow Index - Volume-weighted RSI.
+        
+        BUY: MFI < 20 (oversold)
+        SELL: MFI > 80 (overbought)
+        """
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        
+        vol_col = 'tick_volume' if 'tick_volume' in df.columns else 'volume'
+        volume = df[vol_col] if vol_col in df.columns else pd.Series(1, index=df.index)
+        
+        typical = (high + low + close) / 3
+        raw_money_flow = typical * volume
+        
+        # Positive and negative flow
+        flow_direction = typical.diff()
+        positive_flow = raw_money_flow.where(flow_direction > 0, 0)
+        negative_flow = raw_money_flow.where(flow_direction < 0, 0)
+        
+        positive_sum = positive_flow.rolling(period).sum()
+        negative_sum = negative_flow.rolling(period).sum()
+        
+        mfi = 100 - (100 / (1 + positive_sum / (negative_sum + 1e-10)))
+        
+        signal = pd.Series(0, index=df.index)
+        signal[mfi < 20] = 1   # Oversold
+        signal[mfi > 80] = -1  # Overbought
+        
+        strength = np.abs(mfi - 50) / 50
+        
+        return pd.DataFrame({
+            'mfi_signal': signal,
+            'mfi_strength': strength.clip(0, 1),
+            'mfi_value': mfi / 100,
+        }, index=df.index)
+    
+    # =========================================================================
+    # 19. HURST EXPONENT (Simplified)
+    # =========================================================================
+    
+    def hurst_signal(self, df: pd.DataFrame, period: int = 100) -> pd.DataFrame:
+        """
+        Simplified Hurst Exponent estimation.
+        
+        H < 0.5: Mean-reverting (range trading)
+        H = 0.5: Random walk
+        H > 0.5: Trending
+        """
+        close = df['close']
+        returns = close.pct_change()
+        
+        # Simplified R/S analysis
+        def calc_hurst(series):
+            if len(series) < 20:
+                return 0.5
+            
+            mean = series.mean()
+            std = series.std()
+            if std < 1e-10:
+                return 0.5
+            
+            cumdev = np.cumsum(series - mean)
+            R = cumdev.max() - cumdev.min()
+            S = std
+            
+            if S > 0 and R > 0:
+                # Approximate Hurst
+                return np.log(R / S) / np.log(len(series))
+            return 0.5
+        
+        hurst = returns.rolling(period).apply(calc_hurst, raw=True)
+        hurst = hurst.fillna(0.5)
+        
+        # Signal based on regime
+        signal = pd.Series(0, index=df.index)
+        signal[hurst > 0.6] = 1   # Trending - follow trend
+        signal[hurst < 0.4] = -1  # Mean-reverting - fade moves
+        
+        # Strength = deviation from 0.5
+        strength = np.abs(hurst - 0.5) * 2
+        
+        return pd.DataFrame({
+            'hurst_signal': signal,
+            'hurst_strength': strength.clip(0, 1),
+            'hurst_value': hurst,
+        }, index=df.index)
+    
+    # =========================================================================
     # MAIN GENERATOR
     # =========================================================================
     
@@ -615,6 +1090,36 @@ class StrategySignalsGenerator:
         # 9. Trend Strength
         signals.append(self.trend_strength_signal(df))
         
+        # 10. SuperTrend
+        signals.append(self.supertrend_signal(df))
+        
+        # 11. Ichimoku Cloud
+        signals.append(self.ichimoku_signal(df))
+        
+        # 12. VWAP
+        signals.append(self.vwap_signal(df))
+        
+        # 13. Keltner Channels
+        signals.append(self.keltner_signal(df))
+        
+        # 14. CCI
+        signals.append(self.cci_signal(df))
+        
+        # 15. Williams %R
+        signals.append(self.williams_r_signal(df))
+        
+        # 16. Parabolic SAR
+        signals.append(self.parabolic_sar_signal(df))
+        
+        # 17. Awesome Oscillator
+        signals.append(self.awesome_oscillator_signal(df))
+        
+        # 18. MFI
+        signals.append(self.mfi_signal(df))
+        
+        # 19. Hurst Exponent
+        signals.append(self.hurst_signal(df))
+        
         # Combine all
         result = pd.concat(signals, axis=1)
         
@@ -645,6 +1150,26 @@ class StrategySignalsGenerator:
             'atr_pct', 'atr_ratio', 'volatility_state',
             # Trend
             'trend_signal', 'trend_strength', 'adx', 'plus_di', 'minus_di',
+            # SuperTrend
+            'supertrend_signal', 'supertrend_strength', 'supertrend_dist',
+            # Ichimoku
+            'ichimoku_signal', 'ichimoku_strength', 'ichimoku_tk_diff', 'ichimoku_cloud_pos',
+            # VWAP
+            'vwap_signal', 'vwap_strength', 'vwap_dist',
+            # Keltner
+            'keltner_signal', 'keltner_strength', 'keltner_position',
+            # CCI
+            'cci_signal', 'cci_strength', 'cci_value',
+            # Williams %R
+            'williams_signal', 'williams_strength', 'williams_value',
+            # Parabolic SAR
+            'psar_signal', 'psar_strength', 'psar_dist',
+            # Awesome Oscillator
+            'ao_signal', 'ao_strength', 'ao_value',
+            # MFI
+            'mfi_signal', 'mfi_strength', 'mfi_value',
+            # Hurst
+            'hurst_signal', 'hurst_strength', 'hurst_value',
         ]
     
     def get_feature_dim(self) -> int:
