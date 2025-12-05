@@ -1,0 +1,38 @@
+{
+  "timestamp": "2025-12-05T03:58:00.545124",
+  "epochs_trained": 287,
+  "best_epoch": 237,
+  "best_val_mcc": 0.282254622317801,
+  "test_loss": 1.474964680674674,
+  "test_accuracy": 0.3160227303624351,
+  "test_mcc": 0.07346629631878417,
+  "per_class_accuracy": {
+    "DOWN": 0.61320211786372,
+    "NEUTRAL": 0.10046350271561406,
+    "UP": 0.4310254580061861
+  },
+  "confusion_matrix": [
+    [
+      10655,
+      745,
+      5976
+    ],
+    [
+      18082,
+      3533,
+      13552
+    ],
+    [
+      11027,
+      930,
+      9058
+    ]
+  ],
+  "hyperparameters": {
+    "batch_size": 24576,
+    "lr": 0.001,
+    "weight_decay": 0.001,
+    "epochs": 500,
+    "patience": 50
+  }
+}

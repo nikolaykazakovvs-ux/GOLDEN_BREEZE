@@ -67,3 +67,43 @@ SENTIMENT_WEAK_THRESHOLD = 0.1
 # Self-learning параметры
 FEEDBACK_BATCH_SIZE = 100  # Обновлять статистику каждые N сделок
 FEEDBACK_WINDOW_DAYS = 30  # Анализировать последние N дней
+
+# ============================================================================
+# CONNECTOR CREDENTIALS
+# ============================================================================
+
+# MetaTrader 5 настройки
+MT5_CONFIG = {
+    "login": None,      # Ваш логин MT5
+    "password": None,   # Ваш пароль MT5
+    "server": None,     # Сервер брокера
+    "timeout": 60000,   # Таймаут в ms
+    "portable": False,  # Портативный режим
+}
+
+# MEXC (Crypto Exchange) настройки
+MEXC_CONFIG = {
+    "api_key": None,      # API Key от MEXC
+    "api_secret": None,   # API Secret от MEXC
+    "testnet": False,     # True для тестовой сети
+    "market_type": "spot",  # "spot" или "futures"
+}
+
+# TradeLocker (Prop Firms) настройки
+TRADELOCKER_CONFIG = {
+    "email": None,        # Email для входа
+    "password": None,     # Пароль
+    "server": None,       # Сервер TradeLocker
+    "account_id": None,   # ID торгового аккаунта (опционально)
+    "demo": True,         # True для демо, False для live
+}
+
+# Активный источник данных по умолчанию
+DEFAULT_DATA_SOURCE = "mt5"  # "mt5", "mexc", "tradelocker"
+
+# Символы для каждого источника
+SOURCE_SYMBOLS = {
+    "mt5": ["XAUUSD", "EURUSD", "GBPUSD"],
+    "mexc": ["BTC/USDT", "ETH/USDT", "XAU/USDT"],
+    "tradelocker": ["XAUUSD", "NQ100", "ES"],
+}

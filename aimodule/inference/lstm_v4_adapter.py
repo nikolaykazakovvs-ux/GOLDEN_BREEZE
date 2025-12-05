@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from aimodule.models.v4_lstm import LSTMModelV4, LSTMConfig
 from aimodule.data_pipeline.strategy_signals import StrategySignalsGenerator
+from aimodule.data_pipeline.features_v3 import V3Features
+from aimodule.data_pipeline.smc_processor import SMCProcessorSimple
 
 
 @dataclass
@@ -94,6 +96,8 @@ class LSTMV4Adapter:
         
         # Initialize feature generators
         self.strategy_gen = StrategySignalsGenerator()
+        self.v3_features = V3Features()  # Use exact same feature generator as training
+        self.smc_processor = SMCProcessorSimple(lookback=50)  # Match training
         
         print(f"✅ LSTMV4Adapter initialized on {self.device}")
     
@@ -104,11 +108,19 @@ class LSTMV4Adapter:
         
         model = LSTMModelV4(config=self.config)
         
-        state_dict = torch.load(
+        # Load checkpoint (may contain optimizer state)
+        checkpoint = torch.load(
             self.checkpoint_path, 
             map_location=self.device, 
-            weights_only=True,
+            weights_only=False,  # Allow loading full checkpoint
         )
+        
+        # Extract model state dict if checkpoint is a dict
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+        else:
+            state_dict = checkpoint
+            
         model.load_state_dict(state_dict)
         model.to(self.device)
         model.eval()
@@ -117,153 +129,41 @@ class LSTMV4Adapter:
     
     def _generate_v3_features(self, df: pd.DataFrame) -> np.ndarray:
         """
-        Generate V3 features from OHLCV data.
+        Generate V3 features from OHLCV data using V3Features class.
         
-        Features (15 total):
-        - OHLCV normalized (5)
-        - Returns (1)
-        - Volatility (1)
-        - RSI (1)
-        - MACD (3)
-        - Bollinger (2)
-        - ATR (1)
-        - Volume MA ratio (1)
+        Uses the SAME feature generator as training to ensure consistency.
+        
+        Features (15 total from V3Features):
+        - close (z-score normalized)
+        - returns, log_returns
+        - sma_fast, sma_slow, sma_ratio
+        - atr, atr_norm
+        - rsi, bb_position
+        - volume_ratio
+        - SMC_FVG_Bullish, SMC_FVG_Bearish
+        - SMC_Swing_High, SMC_Swing_Low
         """
-        df = df.copy()
-        
-        # Normalize OHLCV by close
-        close = df['close'].values
-        df['open_norm'] = df['open'] / close
-        df['high_norm'] = df['high'] / close
-        df['low_norm'] = df['low'] / close
-        df['close_norm'] = 1.0
-        
-        # Volume normalization
-        vol_col = 'tick_volume' if 'tick_volume' in df.columns else 'volume'
-        vol_ma = df[vol_col].rolling(20).mean()
-        df['vol_norm'] = df[vol_col] / (vol_ma + 1e-8)
-        
-        # Returns
-        df['returns'] = df['close'].pct_change()
-        
-        # Volatility (20-period)
-        df['volatility'] = df['returns'].rolling(20).std()
-        
-        # RSI
-        delta = df['close'].diff()
-        gain = delta.where(delta > 0, 0).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / (loss + 1e-8)
-        df['rsi'] = 100 - (100 / (1 + rs))
-        df['rsi'] = df['rsi'] / 100  # Normalize to 0-1
-        
-        # MACD
-        ema12 = df['close'].ewm(span=12).mean()
-        ema26 = df['close'].ewm(span=26).mean()
-        df['macd'] = (ema12 - ema26) / close
-        df['macd_signal'] = df['macd'].ewm(span=9).mean()
-        df['macd_hist'] = df['macd'] - df['macd_signal']
-        
-        # Bollinger Bands
-        sma20 = df['close'].rolling(20).mean()
-        std20 = df['close'].rolling(20).std()
-        df['bb_upper'] = (sma20 + 2 * std20) / close
-        df['bb_lower'] = (sma20 - 2 * std20) / close
-        
-        # ATR
-        high = df['high']
-        low = df['low']
-        prev_close = df['close'].shift(1)
-        tr = pd.concat([
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ], axis=1).max(axis=1)
-        df['atr'] = tr.rolling(14).mean() / close
-        
-        # Volume MA ratio
-        df['vol_ma_ratio'] = df[vol_col] / (df[vol_col].rolling(20).mean() + 1e-8)
-        
-        # Select features
-        feature_cols = [
-            'open_norm', 'high_norm', 'low_norm', 'close_norm', 'vol_norm',
-            'returns', 'volatility', 'rsi',
-            'macd', 'macd_signal', 'macd_hist',
-            'bb_upper', 'bb_lower',
-            'atr', 'vol_ma_ratio',
-        ]
-        
-        features = df[feature_cols].fillna(0).values.astype(np.float32)
-        
+        features_df = self.v3_features.extract_features(df)
+        features = features_df.fillna(0).values.astype(np.float32)
         return features
     
     def _generate_smc_features(self, df: pd.DataFrame) -> np.ndarray:
         """
-        Generate SMC features from H1 data.
+        Generate SMC features from H1 data using SMCProcessorSimple.
+        
+        Uses the SAME processor as training to ensure consistency.
         
         Features (8 total):
-        - Trend direction (1)
-        - Trend strength (1)
-        - Support distance (1)
-        - Resistance distance (1)
-        - Volume profile (1)
-        - Session (1)
-        - Momentum (1)
-        - Structure (1)
+        1. Position in range (0-1)
+        2. Distance to high (0-1)
+        3. Body ratio
+        4. Upper wick ratio
+        5. Lower wick ratio
+        6. Higher high marker (-1, 0, 1)
+        7. Lower low marker (-1, 0, 1)
+        8. Momentum (normalized)
         """
-        df = df.copy()
-        close = df['close'].values
-        
-        # Trend direction (EMA20 vs EMA50)
-        ema20 = df['close'].ewm(span=20).mean()
-        ema50 = df['close'].ewm(span=50).mean()
-        df['trend_dir'] = ((ema20 - ema50) / close).clip(-0.1, 0.1) * 10
-        
-        # Trend strength (ADX-like)
-        high = df['high']
-        low = df['low']
-        plus_dm = high.diff().clip(lower=0)
-        minus_dm = (-low.diff()).clip(lower=0)
-        tr = (high - low).rolling(14).mean()
-        df['trend_strength'] = ((plus_dm - minus_dm).abs().rolling(14).mean() / (tr + 1e-8)).clip(0, 1)
-        
-        # Support distance (distance to 20-period low)
-        low20 = df['low'].rolling(20).min()
-        df['support_dist'] = ((close - low20) / close).clip(0, 0.1) * 10
-        
-        # Resistance distance (distance to 20-period high)
-        high20 = df['high'].rolling(20).max()
-        df['resist_dist'] = ((high20 - close) / close).clip(0, 0.1) * 10
-        
-        # Volume profile
-        vol_col = 'tick_volume' if 'tick_volume' in df.columns else 'volume'
-        vol_ma = df[vol_col].rolling(20).mean()
-        df['vol_profile'] = (df[vol_col] / (vol_ma + 1e-8)).clip(0, 3) / 3
-        
-        # Session encoding (simplified)
-        if 'time' in df.columns:
-            hours = pd.to_datetime(df['time']).dt.hour
-            df['session'] = ((hours >= 8) & (hours < 16)).astype(float) * 0.5 + \
-                           ((hours >= 13) & (hours < 22)).astype(float) * 0.5
-        else:
-            df['session'] = 0.5
-        
-        # Momentum (ROC)
-        df['momentum'] = (df['close'].pct_change(5)).clip(-0.1, 0.1) * 10
-        
-        # Structure (higher highs / lower lows)
-        hh = (df['high'] > df['high'].shift(1)).astype(float)
-        ll = (df['low'] < df['low'].shift(1)).astype(float)
-        df['structure'] = (hh.rolling(5).mean() - ll.rolling(5).mean()).clip(-1, 1)
-        
-        feature_cols = [
-            'trend_dir', 'trend_strength', 'support_dist', 'resist_dist',
-            'vol_profile', 'session', 'momentum', 'structure',
-        ]
-        
-        features = df[feature_cols].fillna(0).values.astype(np.float32)
-        
-        return features
+        return self.smc_processor.process(df)
     
     def _create_windows(
         self,

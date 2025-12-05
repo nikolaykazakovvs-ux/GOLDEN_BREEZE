@@ -1,0 +1,11 @@
+{
+  "source": "mexc",
+  "symbol": "BTC/USDT",
+  "last_update": "2025-12-05T23:31:13.311809+00:00",
+  "timeframes": {
+    "1h": {
+      "count": 50,
+      "updated": "2025-12-05T23:31:13.311940+00:00"
+    }
+  }
+}

@@ -584,3 +584,79 @@ if __name__ == "__main__":
             print(f"Active OBs at bar 50: {len(dynamic)}")
     
     print("\n✅ SMCProcessor test passed!")
+
+
+# =============================================================================
+# SIMPLE SMC PROCESSOR (for inference, matches training data)
+# =============================================================================
+
+class SMCProcessorSimple:
+    """
+    Simple SMC processor that exactly matches training data generation.
+    
+    Generates 8 features from H1 data:
+    1. Position in range (0-1)
+    2. Distance to high (0-1)
+    3. Body ratio
+    4. Upper wick ratio
+    5. Lower wick ratio
+    6. Higher high marker (-1, 0, 1)
+    7. Lower low marker (-1, 0, 1)
+    8. Momentum (normalized)
+    """
+    
+    def __init__(self, lookback: int = 50):
+        self.lookback = lookback
+    
+    def process(self, df: pd.DataFrame) -> np.ndarray:
+        """
+        Generate SMC features from H1 data.
+        
+        Returns:
+            np.ndarray of shape (n_samples, 8) with SMC features
+        """
+        n = len(df)
+        smc = np.zeros((n, 8), dtype=np.float32)
+        
+        high = df['high'].values.astype(float)
+        low = df['low'].values.astype(float)
+        close = df['close'].values.astype(float)
+        open_ = df['open'].values.astype(float)
+        
+        for i in range(min(self.lookback, n), n):
+            # 1. Price position in range
+            start_idx = max(0, i - self.lookback)
+            window_high = high[start_idx:i+1].max()
+            window_low = low[start_idx:i+1].min()
+            range_val = window_high - window_low
+            
+            if range_val > 0:
+                smc[i, 0] = (close[i] - window_low) / range_val  # Position 0-1
+                smc[i, 1] = (window_high - close[i]) / range_val  # Distance to high
+            
+            # 2. Candle structure
+            body = abs(close[i] - open_[i])
+            wick_up = high[i] - max(close[i], open_[i])
+            wick_down = min(close[i], open_[i]) - low[i]
+            total_range = high[i] - low[i]
+            
+            if total_range > 0:
+                smc[i, 2] = body / total_range  # Body ratio
+                smc[i, 3] = wick_up / total_range  # Upper wick ratio
+                smc[i, 4] = wick_down / total_range  # Lower wick ratio
+            
+            # 3. Market structure
+            # Higher high / Lower low detection
+            if i >= 5:
+                recent_highs = high[i-5:i]
+                recent_lows = low[i-5:i]
+                
+                smc[i, 5] = 1 if high[i] > recent_highs.max() else (-1 if high[i] < recent_highs.min() else 0)
+                smc[i, 6] = 1 if low[i] > recent_lows.max() else (-1 if low[i] < recent_lows.min() else 0)
+            
+            # 4. Momentum
+            if i >= 10:
+                momentum = (close[i] - close[i-10]) / (close[i-10] + 1e-8)
+                smc[i, 7] = np.clip(momentum * 10, -1, 1)  # Normalized
+        
+        return smc

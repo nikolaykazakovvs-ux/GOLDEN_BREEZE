@@ -1,0 +1,30 @@
+{
+  "model": "GoldenBreezeV5Ultimate",
+  "date": "2025-12-05T17:00:48.951327",
+  "total_params": 327751,
+  "best_epoch": 196,
+  "best_val_mcc": 0.572411669979792,
+  "test_metrics": {
+    "loss": 0.7508846256468031,
+    "accuracy": 0.7286495010739824,
+    "mcc": 0.5728610532199944,
+    "per_class": {
+      "0": 0.8320421691558182,
+      "1": 0.6787838871420073,
+      "2": 0.8039945593814876
+    }
+  },
+  "args": {
+    "data_path": "data/prepared/v4_6year_dataset.npz",
+    "save_dir": "models/v5_ultimate",
+    "batch_size": 2048,
+    "epochs": 200,
+    "patience": 30,
+    "lr": 0.0003,
+    "weight_decay": 0.01,
+    "warmup_epochs": 5,
+    "clip_grad": 1.0,
+    "num_workers": 4,
+    "resume": "models/v5_ultimate/best_model.pt"
+  }
+}

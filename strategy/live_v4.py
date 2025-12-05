@@ -55,8 +55,8 @@ class TradingConfig:
     # Symbol
     symbol: str = "XAUUSD"
     
-    # Model
-    model_path: str = "models/v4_5class/lstm_3class_best.pt"
+    # Model - Try new long-run model first, fallback to previous best
+    model_path: str = "models/v4_lstm/best_long_run.pt"
     
     # Data requirements
     m5_bars_required: int = 200
@@ -75,10 +75,6 @@ class TradingConfig:
     
     # Timing
     check_interval: float = 1.0       # Seconds between checks
-    
-    # Trading hours (UTC)
-    session_start_hour: int = 1       # 01:00 UTC
-    session_end_hour: int = 22        # 22:00 UTC
     
     # Logging
     log_file: str = "logs/live_v4.log"
@@ -101,12 +97,12 @@ class MT5Connector:
         self.paper_ticket_counter = 1000
         
     def connect(self) -> bool:
-        """Connect to MT5."""
-        if self.paper_mode:
-            self.connected = True
-            return True
-        
+        """Connect to MT5 (always needed for data, even in paper mode)."""
         if not MT5_AVAILABLE:
+            if self.paper_mode:
+                print("⚠️ MT5 not available - using cached data files")
+                self.connected = True
+                return True
             print("❌ MT5 not available")
             return False
         
@@ -119,21 +115,18 @@ class MT5Connector:
     
     def disconnect(self):
         """Disconnect from MT5."""
-        if not self.paper_mode and MT5_AVAILABLE:
+        if MT5_AVAILABLE:
             mt5.shutdown()
         self.connected = False
     
     def get_m5_data(self, bars: int = 200) -> Optional[pd.DataFrame]:
-        """Get M5 OHLCV data."""
-        if self.paper_mode:
-            # Load from file for paper trading
+        """Get M5 OHLCV data from MT5 (always real-time, even in paper mode)."""
+        if not MT5_AVAILABLE:
+            # Fallback to file only if MT5 not available at all
             path = f"data/raw/{self.config.symbol}/M5.csv"
             if os.path.exists(path):
                 df = pd.read_csv(path)
                 return df.tail(bars)
-            return None
-        
-        if not MT5_AVAILABLE:
             return None
         
         rates = mt5.copy_rates_from_pos(
@@ -143,7 +136,7 @@ class MT5Connector:
             bars
         )
         
-        if rates is None:
+        if rates is None or len(rates) == 0:
             return None
         
         df = pd.DataFrame(rates)
@@ -151,15 +144,13 @@ class MT5Connector:
         return df
     
     def get_h1_data(self, bars: int = 50) -> Optional[pd.DataFrame]:
-        """Get H1 OHLCV data."""
-        if self.paper_mode:
+        """Get H1 OHLCV data from MT5 (always real-time, even in paper mode)."""
+        if not MT5_AVAILABLE:
+            # Fallback to file only if MT5 not available at all
             path = f"data/raw/{self.config.symbol}/H1.csv"
             if os.path.exists(path):
                 df = pd.read_csv(path)
                 return df.tail(bars)
-            return None
-        
-        if not MT5_AVAILABLE:
             return None
         
         rates = mt5.copy_rates_from_pos(
@@ -169,7 +160,7 @@ class MT5Connector:
             bars
         )
         
-        if rates is None:
+        if rates is None or len(rates) == 0:
             return None
         
         df = pd.DataFrame(rates)
@@ -177,16 +168,14 @@ class MT5Connector:
         return df
     
     def get_current_price(self) -> Tuple[float, float]:
-        """Get current bid/ask."""
-        if self.paper_mode:
+        """Get current bid/ask from MT5."""
+        if not MT5_AVAILABLE:
+            # Fallback for no MT5
             df = self.get_m5_data(1)
             if df is not None and len(df) > 0:
                 close = df['close'].iloc[-1]
                 spread = 0.30  # Typical XAUUSD spread
                 return close, close + spread
-            return 0.0, 0.0
-        
-        if not MT5_AVAILABLE:
             return 0.0, 0.0
         
         tick = mt5.symbol_info_tick(self.config.symbol)
@@ -362,16 +351,30 @@ class LiveTradingEngineV4:
         self._setup_logging()
         
         # Initialize components
-        self.logger.info("=" * 60)
+        self.logger.info("="*60)
+        self.logger.info("🟢 LIVE BOT V4 STARTED (24/7 MODE)")
         self.logger.info("🚀 Golden Breeze V4 - Live Trading Engine")
-        self.logger.info("=" * 60)
+        self.logger.info("="*60)
         self.logger.info(f"Mode: {'PAPER' if paper_mode else 'LIVE'}")
         self.logger.info(f"Symbol: {config.symbol}")
         self.logger.info(f"Model: {config.model_path}")
         
-        # Load model
+        # Load model with fallback
+        model_path = config.model_path
+        if not os.path.exists(model_path):
+            # Try fallback paths
+            fallbacks = [
+                "models/v4_5class/lstm_3class_best.pt",
+                "models/v4_lstm/best_model.pt",
+            ]
+            for fb in fallbacks:
+                if os.path.exists(fb):
+                    model_path = fb
+                    self.logger.info(f"⚠️ Using fallback model: {fb}")
+                    break
+        
         self.logger.info("Loading LSTM V4 model...")
-        self.adapter = LSTMV4Adapter(config.model_path)
+        self.adapter = LSTMV4Adapter(model_path)
         
         # Initialize MT5 connector
         self.mt5 = MT5Connector(config, paper_mode)
@@ -408,10 +411,21 @@ class LiveTradingEngineV4:
         self.logger.addHandler(fh)
         self.logger.addHandler(ch)
     
-    def _is_trading_session(self) -> bool:
-        """Check if within trading hours."""
-        now = datetime.now(tz=None)  # Local time
-        return self.config.session_start_hour <= now.hour < self.config.session_end_hour
+    def _is_trading_allowed(self) -> bool:
+        """Check if trading is allowed by MT5 terminal."""
+        if self.paper_mode:
+            return True  # Paper mode always allowed
+        
+        if not MT5_AVAILABLE:
+            return False
+        
+        try:
+            terminal_info = mt5.terminal_info()
+            if terminal_info is None:
+                return False
+            return terminal_info.trade_allowed
+        except:
+            return True  # If check fails, assume allowed
     
     def _detect_new_bar(self, df_m5: pd.DataFrame) -> bool:
         """Detect if a new M5 bar has closed."""
@@ -528,9 +542,9 @@ class LiveTradingEngineV4:
         
         try:
             while self.running:
-                # Check trading session
-                if not self._is_trading_session():
-                    self.logger.debug("Outside trading session, waiting...")
+                # Check if trading is allowed
+                if not self._is_trading_allowed():
+                    self.logger.debug("Trading not allowed by terminal, waiting...")
                     time.sleep(60)
                     continue
                 
