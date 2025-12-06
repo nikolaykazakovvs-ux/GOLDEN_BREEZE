@@ -363,7 +363,10 @@ TRADERS_MASTERY_MASTER = {
 # PROP FIRMS REGISTRY
 # ============================================================================
 
-PROP_FIRMS = {
+# Type alias for tier dictionaries
+TierDict = dict[int, TierRules]
+
+PROP_FIRMS = {  # type: ignore[var-annotated]
     "traders_mastery": {
         "name": "Traders Mastery",
         "url": "https://tradersmastery.com",
@@ -400,18 +403,30 @@ def get_tier_rules(
     if firm not in PROP_FIRMS:
         return None
     
-    tiers = PROP_FIRMS[firm]["account_types"].get(account_type)
-    if not tiers:
+    firm_config = PROP_FIRMS.get(firm)  # type: ignore
+    if not firm_config:
+        return None
+        
+    account_types_map = firm_config.get("account_types")  # type: ignore
+    if not account_types_map:
+        return None
+    
+    tiers = account_types_map.get(account_type)  # type: ignore
+    if not tiers or not isinstance(tiers, dict):
         return None
     
     # Ищем подходящий тир по балансу
-    for tier_balance, rules in sorted(tiers.items()):
-        if rules.min_balance <= balance <= rules.max_balance:
+    for _, rules in sorted(tiers.items()):  # type: ignore
+        if isinstance(rules, TierRules) and rules.min_balance <= balance <= rules.max_balance:
             return rules
     
     # Если не нашли точное совпадение - ищем ближайший
-    closest_tier = min(tiers.keys(), key=lambda x: abs(x - balance))
-    return tiers[closest_tier]
+    tier_keys = [k for k in tiers.keys() if isinstance(k, (int, float))]  # type: ignore
+    if not tier_keys:
+        return None
+    closest_tier = min(tier_keys, key=lambda x: abs(x - balance))
+    result = tiers.get(closest_tier)  # type: ignore
+    return result if isinstance(result, TierRules) else None
 
 
 def detect_tier(balance: float, firm: str = "traders_mastery") -> tuple[int, TierRules]:
