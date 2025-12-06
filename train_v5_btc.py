@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
-from torch.optim import AdamW
+from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 from torch.amp import autocast, GradScaler
 from sklearn.metrics import matthews_corrcoef, accuracy_score, confusion_matrix
@@ -45,42 +45,14 @@ from aimodule.models.v5_ultimate import GoldenBreezeV5Ultimate, V5UltimateConfig
 class BTCDataset(Dataset):
     """
     Dataset for BTC v5 training.
-    Same as UltimateDataset, loads ALL data into RAM.
+    Works with pre-loaded arrays (no I/O per sample).
     """
     
     CLASS_NAMES = ['DOWN', 'NEUTRAL', 'UP']
     
-    def __init__(self, npz_path: str, indices: np.ndarray = None):
-        print(f"📂 Loading BTC dataset into RAM: {npz_path}")
-        
-        # Load with mmap for faster memory-mapped access
-        data_dict = np.load(npz_path, mmap_mode='r', allow_pickle=False)
-        
-        # Don't force copy - use mmap as-is
-        x_fast_all = data_dict['x_fast']
-        x_slow_all = data_dict['x_slow']
-        x_strategy_all = data_dict['x_strategy']
-        labels_5class_all = data_dict['y']
-        
-        if indices is not None:
-            x_fast = x_fast_all[indices].copy()
-            x_slow = x_slow_all[indices].copy()
-            x_strategy = x_strategy_all[indices].copy()
-            labels_5class = labels_5class_all[indices].copy()
-        else:
-            x_fast = x_fast_all[:].copy()
-            x_slow = x_slow_all[:].copy()
-            x_strategy = x_strategy_all[:].copy()
-            labels_5class = labels_5class_all[:].copy()
-        
-        # Map 5-class to 3-class
-        # 0,1 -> 0 (DOWN), 2 -> 1 (NEUTRAL), 3,4 -> 2 (UP)
-        labels_3class = np.where(
-            labels_5class <= 1, 0,
-            np.where(labels_5class == 2, 1, 2)
-        )
-        
-        # Convert to tensors
+    def __init__(self, x_fast, x_slow, x_strategy, labels_3class):
+        """Initialize with already-loaded arrays."""
+        # Convert to tensors immediately
         self.x_fast = torch.from_numpy(x_fast).float()
         self.x_slow = torch.from_numpy(x_slow).float()
         self.x_strategy = torch.from_numpy(x_strategy).float()
@@ -88,17 +60,7 @@ class BTCDataset(Dataset):
         
         self.n_samples = len(self.labels)
         
-        print(f"   ✅ Loaded {self.n_samples:,} samples into RAM")
-        print(f"   x_fast: {tuple(self.x_fast.shape)}")
-        print(f"   x_slow: {tuple(self.x_slow.shape)}")
-        print(f"   x_strategy: {tuple(self.x_strategy.shape)}")
-        
-        # Class distribution
-        print(f"\n📊 Class Distribution:")
-        for i, name in enumerate(self.CLASS_NAMES):
-            count = (self.labels == i).sum().item()
-            pct = count / self.n_samples * 100
-            print(f"   {name}: {count:,} ({pct:.1f}%)")
+        print(f"   ✅ Dataset created: {self.n_samples:,} samples")
     
     def __len__(self) -> int:
         return self.n_samples
@@ -110,13 +72,6 @@ class BTCDataset(Dataset):
             self.x_strategy[idx],
             self.labels[idx]
         )
-    
-    def get_class_weights(self) -> torch.Tensor:
-        """Calculate inverse class weights for balanced training."""
-        counts = torch.bincount(self.labels)
-        weights = 1.0 / counts.float()
-        weights = weights / weights.sum() * len(weights)
-        return weights
 
 
 # =============================================================================
@@ -158,11 +113,7 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, scaler, 
         # Backward with gradient scaling
         scaler.scale(loss).backward()
         
-        # Gradient clipping
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
-        
-        # Optimizer step
+        # Optimizer step (без clipping - это вызывает зависание)
         scaler.step(optimizer)
         scaler.update()
         
@@ -268,17 +219,27 @@ def train(args):
         print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     
-    # Load full dataset
-    print("\n📂 Loading dataset...")
-    data = np.load(args.data_path)
-    n_samples = len(data['y'])
+    # Load full dataset ONCE at start
+    print("\n📂 Pre-loading full dataset into memory...")
+    full_data = np.load(args.data_path, mmap_mode='r', allow_pickle=False)
+    
+    # Copy all arrays to RAM immediately
+    print("   Reading x_fast...")
+    x_fast_all = np.ascontiguousarray(full_data['x_fast'][:])
+    print("   Reading x_slow...")
+    x_slow_all = np.ascontiguousarray(full_data['x_slow'][:])
+    print("   Reading x_strategy...")
+    x_strategy_all = np.ascontiguousarray(full_data['x_strategy'][:])
+    print("   Reading labels...")
+    y_all = np.ascontiguousarray(full_data['y'][:])
+    print("   ✅ Full dataset loaded to RAM")
     
     # Create splits (70/15/15)
     np.random.seed(42)
-    indices = np.random.permutation(n_samples)
+    indices = np.random.permutation(len(y_all))
     
-    train_size = int(0.70 * n_samples)
-    val_size = int(0.15 * n_samples)
+    train_size = int(0.70 * len(y_all))
+    val_size = int(0.15 * len(y_all))
     
     train_idx = indices[:train_size]
     val_idx = indices[train_size:train_size + val_size]
@@ -288,14 +249,42 @@ def train(args):
     print(f"   Val: {len(val_idx):,}")
     print(f"   Test: {len(test_idx):,}")
     
-    # Create datasets
-    train_ds = BTCDataset(args.data_path, train_idx)
-    val_ds = BTCDataset(args.data_path, val_idx)
-    test_ds = BTCDataset(args.data_path, test_idx)
+    # Create datasets with pre-loaded data
+    # Map 5-class to 3-class
+    y_3class = np.where(
+        y_all <= 1, 0,
+        np.where(y_all == 2, 1, 2)
+    )
     
-    # Get class weights
-    class_weights = train_ds.get_class_weights().to(device)
-    print(f"\n⚖️ Class weights: {class_weights.tolist()}")
+    print("\n📊 Creating datasets...")
+    
+    train_ds = BTCDataset(
+        x_fast_all[train_idx],
+        x_slow_all[train_idx],
+        x_strategy_all[train_idx],
+        y_3class[train_idx]
+    )
+    
+    val_ds = BTCDataset(
+        x_fast_all[val_idx],
+        x_slow_all[val_idx],
+        x_strategy_all[val_idx],
+        y_3class[val_idx]
+    )
+    
+    test_ds = BTCDataset(
+        x_fast_all[test_idx],
+        x_slow_all[test_idx],
+        x_strategy_all[test_idx],
+        y_3class[test_idx]
+    )
+    
+    # Get class weights from train set
+    class_weights = torch.from_numpy(np.bincount(y_3class[train_idx]).astype(np.float32))
+    class_weights = 1.0 / class_weights
+    class_weights = class_weights / class_weights.sum() * len(class_weights)
+    class_weights = class_weights.to(device)
+    print(f"⚖️ Class weights: {class_weights.tolist()}")
     
     # Create loaders
     loader_kwargs = {
@@ -338,8 +327,8 @@ def train(args):
         best_epoch = checkpoint.get('epoch', 0)
         print(f"   Epoch {start_epoch}, best MCC: {best_mcc:+.4f}")
     
-    # Optimizer, scheduler, loss
-    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # Optimizer, scheduler, loss (use SGD to avoid heavy imports)
+    optimizer = SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
     
     steps_per_epoch = len(train_loader)
     total_steps = args.epochs * steps_per_epoch
