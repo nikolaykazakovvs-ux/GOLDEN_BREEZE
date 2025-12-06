@@ -25,7 +25,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
-from torch.optim import SGD
+from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.amp import autocast, GradScaler
 from sklearn.metrics import matthews_corrcoef, accuracy_score, confusion_matrix
@@ -315,20 +315,18 @@ def train(args):
     best_mcc = -1.0
     best_epoch = 0
     
-    # Auto-resume from best_model.pt if --resume не задан, но файл существует
-    auto_resume_path = best_model_path if best_model_path.exists() else None
-    resume_path = args.resume or auto_resume_path
-    if resume_path:
-        print(f"\n📂 Resuming from: {resume_path}")
-        checkpoint = torch.load(resume_path, weights_only=False)
+    # Resume only if explicitly requested via --resume flag
+    if args.resume:
+        print(f"\n📂 Resuming from: {args.resume}")
+        checkpoint = torch.load(args.resume, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         start_epoch = checkpoint.get('epoch', 0) + 1
         best_mcc = checkpoint.get('val_mcc', -1.0)
         best_epoch = checkpoint.get('epoch', 0)
         print(f"   Epoch {start_epoch}, best MCC: {best_mcc:+.4f}")
     
-    # Optimizer, scheduler, loss (use SGD to avoid heavy imports)
-    optimizer = SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.weight_decay)
+    # Optimizer, scheduler, loss
+    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     
     steps_per_epoch = len(train_loader)
     total_steps = args.epochs * steps_per_epoch
