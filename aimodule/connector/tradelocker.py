@@ -1,7 +1,12 @@
 """
-TradeLocker Connector
+TradeLocker Connector with Prop-Guardian Risk Core
 Коннектор для TradeLocker (проп-фирмы, фьючерсы)
 Использует REST API с Token Authentication
+
+Включает:
+- Автоматическое определение тира аккаунта
+- PropGuardian для защиты от нарушения лимитов
+- Блокировка торговли при достижении дневного лимита
 """
 
 import logging
@@ -27,13 +32,27 @@ from .base import (
     AccountInfo
 )
 
+# Import PropGuardian
+try:
+    from aimodule.risk.prop_guardian import PropGuardian, RiskError, RiskCheckResult
+    PROP_GUARDIAN_AVAILABLE = True
+except ImportError:
+    PROP_GUARDIAN_AVAILABLE = False
+    PropGuardian = None
+    RiskError = Exception
+
 logger = logging.getLogger(__name__)
 
 
 class TradeLockerConnector(BaseConnector):
     """
-    Коннектор для TradeLocker
+    Коннектор для TradeLocker с Prop-Guardian Protection
     Поддерживает торговлю фьючерсами через проп-фирмы
+    
+    Автоматически:
+    - Определяет тир аккаунта по балансу
+    - Применяет риск-лимиты (Daily Loss, Max Drawdown)
+    - Блокирует торговлю при нарушении лимитов
     """
     
     SOURCE_NAME = "tradelocker"
@@ -67,7 +86,9 @@ class TradeLockerConnector(BaseConnector):
         password: Optional[str] = None,
         server: Optional[str] = None,
         account_id: Optional[str] = None,
-        demo: bool = True
+        demo: bool = True,
+        prop_firm: str = "traders_mastery",
+        enable_guardian: bool = True
     ):
         """
         Args:
@@ -76,6 +97,8 @@ class TradeLockerConnector(BaseConnector):
             server: Сервер TradeLocker
             account_id: ID торгового аккаунта
             demo: True для демо, False для live
+            prop_firm: Название проп-компании для правил
+            enable_guardian: Включить PropGuardian защиту
         """
         super().__init__()
         
@@ -87,6 +110,8 @@ class TradeLockerConnector(BaseConnector):
         self.server = server
         self.account_id = account_id
         self.demo = demo
+        self.prop_firm = prop_firm
+        self.enable_guardian = enable_guardian
         
         self.base_url = self.BASE_URL_DEMO if demo else self.BASE_URL_LIVE
         
@@ -101,12 +126,20 @@ class TradeLockerConnector(BaseConnector):
         # Кэш символов
         self._instruments_cache: dict = {}
         
+        # PropGuardian - инициализируется после подключения
+        self.guardian: Optional[PropGuardian] = None
+        
+        # Дневная статистика
+        self._day_start_balance: float = 0.0
+        self._today_realized_pnl: float = 0.0
+        self._last_pnl_update: Optional[datetime] = None
+        
     @property
     def is_connected(self) -> bool:
         return self._connected and self.access_token is not None
     
     def connect(self) -> bool:
-        """Подключение к TradeLocker"""
+        """Подключение к TradeLocker с автоматической инициализацией PropGuardian"""
         try:
             # Шаг 1: Авторизация
             auth_response = self._authenticate()
@@ -126,6 +159,10 @@ class TradeLockerConnector(BaseConnector):
             # Шаг 3: Загружаем инструменты
             self._load_instruments()
             
+            # Шаг 4: Инициализируем PropGuardian
+            if self.enable_guardian and PROP_GUARDIAN_AVAILABLE:
+                self._init_guardian()
+            
             self._connected = True
             logger.info(f"✅ TradeLocker подключен (demo={self.demo})")
             return True
@@ -134,6 +171,35 @@ class TradeLockerConnector(BaseConnector):
             logger.error(f"❌ Ошибка подключения к TradeLocker: {e}")
             self._connected = False
             return False
+    
+    def _init_guardian(self):
+        """Инициализация PropGuardian на основе баланса"""
+        try:
+            account_info = self.get_account_info()
+            balance = account_info.balance
+            
+            if balance <= 0:
+                logger.warning("Баланс 0 или отрицательный, PropGuardian не инициализирован")
+                return
+            
+            self.guardian = PropGuardian(
+                initial_balance=balance,
+                firm=self.prop_firm,
+                high_water_mark=account_info.equity
+            )
+            
+            # Сохраняем стартовый баланс дня
+            self._day_start_balance = balance
+            self._today_realized_pnl = 0.0
+            
+            logger.info(f"🛡️ PropGuardian активирован:")
+            logger.info(f"   Тир: {self.guardian.rules.tier_name}")
+            logger.info(f"   Дневной лимит: ${self.guardian.daily_loss_limit:,.2f}")
+            logger.info(f"   Макс. просадка: ${self.guardian.total_drawdown_limit:,.2f}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка инициализации PropGuardian: {e}")
+            self.guardian = None
     
     def disconnect(self) -> bool:
         """Отключение от TradeLocker"""
@@ -452,13 +518,48 @@ class TradeLockerConnector(BaseConnector):
         tp: Optional[float] = None,
         comment: str = ""
     ) -> OrderResult:
-        """Размещение ордера"""
+        """
+        Размещение ордера с проверкой PropGuardian
+        
+        Перед отправкой ордера проверяет:
+        - Дневной лимит убытка
+        - Общую просадку
+        - Максимум позиций
+        - Выходные (если запрещено)
+        """
         if not self.is_connected:
             return OrderResult(
                 success=False,
                 order_id=None,
                 message="TradeLocker не подключен"
             )
+        
+        # 🛡️ PROP GUARDIAN CHECK
+        if self.guardian:
+            try:
+                # Получаем текущее состояние
+                account_info = self.get_account_info()
+                daily_pnl = self.get_today_pnl()
+                positions = self.get_positions()
+                
+                # Проверяем разрешение
+                check_result = self.guardian.check_trade_allowance(
+                    current_equity=account_info.equity,
+                    current_daily_pnl=daily_pnl,
+                    current_positions=len(positions)
+                )
+                
+                if not check_result.allowed:
+                    logger.error(f"🚫 TRADE BLOCKED: {check_result.message}")
+                    return OrderResult(
+                        success=False,
+                        order_id=None,
+                        message=f"PropGuardian: {check_result.message}"
+                    )
+                    
+            except Exception as e:
+                logger.warning(f"PropGuardian check failed: {e}")
+                # Продолжаем торговлю если проверка упала
         
         try:
             instrument_id = self._get_instrument_id(symbol)
@@ -468,6 +569,11 @@ class TradeLockerConnector(BaseConnector):
                     order_id=None,
                     message=f"Инструмент {symbol} не найден"
                 )
+            
+            # Проверяем размер лота
+            if self.guardian and volume > self.guardian.rules.max_lot_size:
+                logger.warning(f"⚠️ Volume {volume} exceeds max {self.guardian.rules.max_lot_size}, reducing")
+                volume = self.guardian.rules.max_lot_size
             
             # Формируем ордер
             order_data = {
@@ -495,6 +601,10 @@ class TradeLockerConnector(BaseConnector):
                 )
             
             order_id = data['d'].get('orderId', '')
+            
+            # Обновляем сессию Guardian
+            if self.guardian:
+                self.guardian.session.trades_count += 1
             
             logger.info(f"✅ TradeLocker ордер: {side.value} {volume} {symbol}, ID={order_id}")
             
@@ -622,6 +732,117 @@ class TradeLockerConnector(BaseConnector):
     def get_available_symbols(self) -> list[str]:
         """Получение списка доступных символов"""
         return list(self._instruments_cache.keys())
+    
+    # =========================================================================
+    # PROP GUARDIAN METHODS
+    # =========================================================================
+    
+    def get_today_pnl(self) -> float:
+        """
+        Получение P&L за сегодня
+        
+        Returns:
+            Сумма реализованного и нереализованного P&L
+        """
+        try:
+            account_info = self.get_account_info()
+            positions = self.get_positions()
+            
+            # Нереализованный P&L из позиций
+            unrealized_pnl = sum(pos.profit for pos in positions)
+            
+            # Реализованный P&L = текущий баланс - стартовый баланс
+            if self._day_start_balance > 0:
+                realized_pnl = account_info.balance - self._day_start_balance
+            else:
+                realized_pnl = 0
+            
+            total_pnl = realized_pnl + unrealized_pnl
+            
+            # Обновляем guardian
+            if self.guardian:
+                self.guardian.update_equity(account_info.equity, realized_pnl)
+            
+            return total_pnl
+            
+        except Exception as e:
+            logger.error(f"Ошибка получения P&L: {e}")
+            return 0.0
+    
+    def check_can_trade(self) -> RiskCheckResult:
+        """
+        Быстрая проверка возможности торговли
+        
+        Returns:
+            RiskCheckResult с информацией о статусе
+        """
+        if not self.guardian:
+            # Без guardian - всегда разрешено
+            from aimodule.risk.prop_guardian import RiskStatus
+            return RiskCheckResult(
+                allowed=True,
+                status=RiskStatus.OK,
+                message="PropGuardian not enabled"
+            )
+        
+        account_info = self.get_account_info()
+        daily_pnl = self.get_today_pnl()
+        positions = self.get_positions()
+        
+        return self.guardian.check_trade_allowance(
+            current_equity=account_info.equity,
+            current_daily_pnl=daily_pnl,
+            current_positions=len(positions)
+        )
+    
+    def get_safe_lot_size(
+        self,
+        risk_percent: float = 1.0,
+        stop_loss_pips: float = 50.0,
+        symbol: str = "XAUUSD"
+    ) -> float:
+        """
+        Расчёт безопасного размера лота
+        
+        Args:
+            risk_percent: Процент риска от баланса
+            stop_loss_pips: Размер стоп-лосса в пипсах
+            symbol: Торговый символ
+            
+        Returns:
+            Размер лота
+        """
+        if not self.guardian:
+            # Без guardian - базовый расчёт
+            account_info = self.get_account_info()
+            risk_amount = account_info.balance * (risk_percent / 100)
+            pip_value = 10.0  # Default для золота
+            return round(risk_amount / (stop_loss_pips * pip_value), 2)
+        
+        risk_amount = self.guardian.get_risk_amount(risk_percent)
+        return self.guardian.get_safe_lot_size(
+            risk_amount=risk_amount,
+            stop_loss_pips=stop_loss_pips,
+            symbol=symbol
+        )
+    
+    def get_guardian_status(self) -> dict:
+        """Получение статуса PropGuardian"""
+        if not self.guardian:
+            return {"enabled": False, "message": "PropGuardian not initialized"}
+        
+        return self.guardian.get_status_report()
+    
+    def reset_daily_stats(self):
+        """Сброс дневной статистики (вызывать в начале нового торгового дня)"""
+        account_info = self.get_account_info()
+        self._day_start_balance = account_info.balance
+        self._today_realized_pnl = 0.0
+        
+        if self.guardian:
+            self.guardian.start_session(account_info.equity)
+        
+        logger.info(f"📅 Daily stats reset. Starting balance: ${account_info.balance:,.2f}")
 
 
 # Псевдоним для удобства
