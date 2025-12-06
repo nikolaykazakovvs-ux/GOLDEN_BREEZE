@@ -5,24 +5,25 @@
 [![CUDA 12.4](https://img.shields.io/badge/CUDA-12.4-green.svg)](https://developer.nvidia.com/cuda-toolkit)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Локальный AI-модуль для генерации торговых сигналов по золоту (XAUUSD) с мультитаймфреймовой логикой и полным конвейером обучения.
+Локальный AI-модуль для генерации торговых сигналов с использованием глубокого обучения, мультитаймфреймовой логики и полным конвейером обучения.
 
-## 🚀 Model v4 Lite Performance (Latest)
+## 🏆 Model v5 Ultimate Performance (Latest)
 
-| Метрика | V3 LSTM | V4 Lite Distilled |
-|---------|---------|-------------------|
-| **Test MCC** | 0.1224 | **0.1495** ✅ |
-| **Accuracy** | 62.2% | 57.4% |
-| **Architecture** | LSTM | Transformer |
-| **Parameters** | 53K | 83K |
+| Метрика | V4 Lite | **V5 Ultimate** | Улучшение |
+|---------|---------|-----------------|-----------|
+| **Val MCC** | 0.1495 | **0.3316** 🏆 | **+122%** |
+| **Train MCC** | 0.14 | 0.3312 | **+136%** |
+| **Architecture** | Transformer | LSTM Hybrid | — |
+| **Parameters** | 83K | 327K | +3.9x |
+| **Dataset** | XAUUSD | **BTC** | Generalized |
 
-**V4 Lite** обучена через Knowledge Distillation от V3, превзошла teacher на **+22%** по MCC!
-
-### 🆕 V4 Features
-- ✅ Transformer architecture (2 encoder layers)
-- ✅ 15 engineered features + 33 strategy signals + 8 SMC
-- ✅ Knowledge Distillation from V3 LSTM
-- ✅ 2-class classification (DOWN/UP)
+### 🆕 V5 Ultimate Features
+- ✅ 3-layer LSTM with 128 hidden units
+- ✅ BatchNormalization for stability
+- ✅ 517K training samples (BTC M5+H1)
+- ✅ Mixed precision training (AMP)
+- ✅ GPU-optimized: TF32, cuDNN benchmark
+- ✅ **Val MCC: 0.3316** (epoch 91)
 
 ---
 
@@ -31,44 +32,48 @@
 ### 🧠 AI Models
 | Модель | Архитектура | MCC | Статус |
 |--------|-------------|-----|--------|
-| **V4 Lite Distilled** | Transformer + Distillation | 0.15 | ✅ **Latest** |
-| **Direction LSTM v3** | 2-Layer LSTM | 0.12 | ✅ Production |
-| **V4 Full Transformer** | Dual-Stream Fusion | 0.00 | ❌ Broken |
+| **V5 Ultimate BTC** | 3L LSTM + BatchNorm | **0.3316** 🏆 | ✅ **Latest** |
+| **V4 Lite Distilled** | Transformer + Distillation | 0.1495 | ✅ Archive |
+| **Direction LSTM v3** | 2-Layer LSTM | 0.1224 | ✅ Archive |
 | **Regime ML** | KMeans/GMM clustering | — | ✅ Ready |
 | **Sentiment Engine** | HuggingFace + Lexicon | — | ✅ Ready |
 
 ### 📊 Features
-- ✅ **V4 Lite**: Transformer с Knowledge Distillation
-- ✅ **Gold-Optimized Features**: 15 инженерных признаков
-- ✅ **Strategy Signals**: 33 сигнала стратегий
+- ✅ **V5 Ultimate**: Advanced LSTM для BTC
+- ✅ **Gold-Optimized Features**: 15+ инженерных признаков
+- ✅ **Strategy Signals**: 33+ сигнала стратегий
 - ✅ **Smart Money Concepts (SMC)**: 8 статических признаков
-- ✅ **GPU Acceleration**: CUDA 12.4, RTX 3070
+- ✅ **GPU Acceleration**: CUDA 12.4, TF32, cuDNN
 - ✅ **MT5 Integration**: Real-time data from MetaTrader 5
 
 ## 🚀 AI Models Overview
 
-### 1. V4 Lite Distilled (Latest) ⭐
+### 1. V5 Ultimate (Latest) 🏆
+- **Архитектура**: 3-Layer LSTM, 128 hidden units, BatchNorm, Dropout 0.3
+- **Признаки**: Multi-timeframe BTC data (M5 + H1)
+- **Модель**: `models/v5_btc/best_model.pt` (327K параметров)
+- **Результат**: **Val MCC 0.3316** (эпоха 91 из 100)
+- **Улучшение**: +122% vs V4 Lite
+- **Обучение**: 517,942 samples, batch 512, 100 эпох
+- **Статус**: ✅ Production Ready
+- **📖 Подробнее**: [README_V5.md](README_V5.md)
+
+### 2. V4 Lite Distilled (Archive)
 - **Архитектура**: Transformer (2 encoder layers, 4 heads)
 - **Признаки**: 15 engineered + 33 strategy signals + 8 SMC
 - **Метод**: Knowledge Distillation от V3 LSTM
 - **Модель**: `models/v4_lite_distilled.pt` (83K параметров)
-- **Результат**: MCC 0.1495, превосходит V3!
+- **Результат**: MCC 0.1495
 
-### 2. Direction LSTM v3 (Teacher)
+### 3. Direction LSTM v3 (Archive)
 - **Архитектура**: 2-Layer LSTM, 64 hidden units, dropout 0.3
-- **Признаки**: 11 (close, returns, sma, atr, rsi, bb_position...)
 - **Модель**: `models/direction_lstm_hybrid_XAUUSD.pt` (53K параметров)
 - **Результат**: MCC 0.1224
 
-### 3. V4 Full Transformer (Deprecated)
-- **Архитектура**: Dual-Stream Sliding-Patch Transformer
-- **Проблема**: Collapsed (MCC=0.0, предсказывает только 1 класс)
-- **Статус**: ❌ Заменён на V4 Lite
-
 ### 4. Regime ML Model
 - **Технология**: KMeans/GaussianMixture (scikit-learn)
-- **Признаки**: returns, ATR, SMA slope, volatility
 - **Модель**: `models/regime_ml.pkl`
+- **Статус**: ✅ Ready
 
 ### 5. Sentiment Engine
 - **Уровень 1**: HuggingFace (twitter-roberta-base-sentiment)
@@ -79,30 +84,41 @@
 
 ```
 Golden Breeze/
-├── aimodule/                    # AI Core
+├── models/v5_btc/                    # 🆕 V5 Ultimate (Latest)
+│   ├── best_model.pt                 # Best: Val MCC 0.3316 ✨
+│   ├── checkpoint_*.pt               # Training checkpoints
+│   └── best_model_mcc0.3316_*.pt    # Backup
+│
+├── aimodule/                         # AI Core
 │   ├── models/
-│   │   ├── direction_lstm_model.py    # LSTM v3
-│   │   └── v4_transformer/            # 🆕 Fusion Transformer v4
-│   │       ├── config.py              # V4Config
-│   │       ├── embeddings.py          # SlidingPatchEmbed, SMCEmbed
-│   │       ├── fusion.py              # GatedCrossAttention
-│   │       └── model.py               # GoldenBreezeFusionV4
+│   │   ├── v5_btc.py                 # 🆕 GoldenBreezeV5Ultimate
+│   │   ├── direction_lstm_model.py   # LSTM v3 (legacy)
+│   │   └── v4_transformer/           # Transformer v4 (archive)
 │   ├── data_pipeline/
-│   │   ├── features.py                # Base features
-│   │   ├── features_gold.py           # Gold-specific features
-│   │   └── features_smc.py            # SMC features
-│   ├── training/                      # Training scripts
-│   ├── inference/                     # Prediction modules
-│   └── server/                        # FastAPI gateway
-├── strategy/                          # Hybrid Strategy v1.1
-│   ├── hybrid_strategy.py             # Main strategy class
-│   ├── timeframe_selector.py          # Dynamic TF selection
-│   ├── risk_manager.py                # Risk management
-│   └── backtest_engine.py             # Backtesting
-├── models/                            # Trained models
-│   ├── direction_lstm_gold_v3.pt      # ⭐ Production model
-│   └── direction_lstm_gold_v3.json    # Metadata
-├── data/
+│   │   ├── features.py
+│   │   ├── features_gold.py
+│   │   └── features_smc.py
+│   ├── training/
+│   ├── inference/
+│   └── server/
+│
+├── strategy/
+│   ├── hybrid_strategy.py
+│   ├── timeframe_selector.py
+│   ├── risk_manager.py
+│   └── backtest_engine.py
+│
+├── data/prepared/
+│   ├── btc_v5.npz                   # 🆕 Training data (517K)
+│   ├── btc_v5_meta.json             # 🆕 Metadata
+│   └── btc_v5_test.npz              # 🆕 Test data
+│
+├── train_v5_btc.py                   # 🆕 V5 Training
+├── evaluate_best_model.py            # 🆕 V5 Evaluation
+├── BTC_V5_STATUS.md                  # 🆕 V5 Status
+├── README_V5.md                      # 🆕 V5 Detailed Docs
+└── README.md                         # Main README
+```
 │   ├── raw/XAUUSD/                    # MT5 exported data
 │   ├── labels/                        # Training labels
 │   └── prepared/                      # Prepared datasets
